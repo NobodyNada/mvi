@@ -1,0 +1,21 @@
+[package]
+name = "mvi"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { version = "1.0.72", features = ["backtrace"] }
+imgui = { version = "0.11.0", features = ["docking"] }
+imgui-winit-support = "0.11.0"
+libloading = "0.8.0"
+libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
+vulkano = "0.33.0"
+vulkano-shaders = "0.33.0"
+vulkano-util = "0.33.0"
+vulkano-win = { version = "0.33.0", default-features = false, features = ["raw-window-handle"] }
+winit = "0.27"
+
+[profile.dev]
+opt-level = 1
