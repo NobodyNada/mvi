@@ -325,7 +325,7 @@ impl Renderer {
         let color_format = context
             .device()
             .physical_device()
-            .surface_formats(&surface, Default::default())?
+            .surface_formats(surface, Default::default())?
             .iter()
             .find(|(f, c)| {
                 *c == vk::swapchain::ColorSpace::SrgbNonLinear
