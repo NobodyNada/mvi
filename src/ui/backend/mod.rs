@@ -318,13 +318,16 @@ pub fn run(
 
             platform.prepare_render(ui, &window);
             imgui.update_platform_windows();
+            let mut frame = renderer.begin();
 
-            renderer.render(&mut target, imgui.render()).unwrap();
+            frame.render(&mut target, imgui.render()).unwrap();
 
             for (viewport, (_w, target)) in &mut viewport_windows {
                 let viewport = imgui.viewport_by_id_mut(*viewport).unwrap();
-                renderer.render(target, viewport.draw_data()).unwrap();
+                frame.render(target, viewport.draw_data()).unwrap();
             }
+
+            frame.wait().unwrap();
         }
 
         event_proxy.send_event(UserEvent::Exit).unwrap();

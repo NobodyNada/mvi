@@ -42,6 +42,8 @@ pub struct Renderer {
     buffer_allocator:
         vk::buffer::allocator::SubbufferAllocator<vk::memory::allocator::StandardMemoryAllocator>,
 
+    previous_frame: Option<Box<dyn GpuFuture>>,
+
     /// An integer identifying the last frame to be rendered.
     frame_id: u64,
 
@@ -61,6 +63,11 @@ pub struct Target {
 pub struct Texture {
     pub id: TextureId,
     descriptor: Arc<vk::descriptor_set::PersistentDescriptorSet>,
+}
+
+pub struct Frame<'a> {
+    pub renderer: &'a mut Renderer,
+    pub inflight: Option<Box<dyn GpuFuture>>,
 }
 
 mod shaders {
@@ -139,7 +146,17 @@ impl Renderer {
         &self.command_buffer_allocator
     }
 
-    pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
+    pub fn begin(&mut self) -> Frame {
+        if let Some(f) = self.previous_frame.as_mut() {
+            f.cleanup_finished()
+        }
+        Frame {
+            inflight: None,
+            renderer: self,
+        }
+    }
+
+    fn _render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<impl GpuFuture> {
         // Create a command buffer to store our rendering commands.
         let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
@@ -290,10 +307,16 @@ impl Renderer {
 
         self.frame_id += 1;
 
-        // Submit the command buffer for execution after the next framebuffer is available.
-        let result = command_buffer
+        // Submit the command buffer for execution after the next framebuffer is available, and the
+        // previous frame finishes rendering.
+        let ready = if let Some(prev) = std::mem::take(&mut self.previous_frame) {
+            framebuffer.ready.join(prev).boxed()
+        } else {
+            framebuffer.ready.boxed()
+        };
+        let inflight = command_buffer
             .build()?
-            .execute_after(framebuffer.ready, self.context.graphics_queue().clone())?
+            .execute_after(ready, self.context.graphics_queue().clone())?
             .then_swapchain_present(
                 self.context.graphics_queue().clone(),
                 vk::swapchain::SwapchainPresentInfo {
@@ -303,24 +326,12 @@ impl Renderer {
                         framebuffer.index as u32,
                     )
                 },
-            )
-            .then_signal_fence_and_flush();
-
-        match result {
-            Ok(mut inflight) => {
+            );
+        match inflight.flush() {
+            Ok(()) => {
                 // Our frame is being processed!
                 // Clean up any old textures.
                 self.textures.retain(|_, t| t.strong_count() != 0);
-
-                // Wait for the frame to be presented.
-                inflight.wait(None)?;
-                inflight.cleanup_finished();
-            }
-            Err(vk::sync::FlushError::ResourceAccessError {
-                error: vk::sync::future::AccessError::UnexpectedImageLayout { allowed, requested },
-                ..
-            }) => {
-                bail!("Unexpected image layout (allowed: {allowed:?}, requested: {requested:?})");
             }
             Err(vk::sync::FlushError::OutOfDate) => {
                 // This frame could not be rendered because the swapchain is no longer valid.
@@ -328,9 +339,8 @@ impl Renderer {
                 target.invalidate();
             }
             Err(e) => bail!(e), // Something went wrong; return the error so we can print it.
-        };
-
-        Ok(())
+        }
+        Ok(inflight)
     }
 
     /// Initializes all rendering resources.
@@ -518,6 +528,8 @@ impl Renderer {
             .wait(None)?;
 
         let result = Renderer {
+            previous_frame: None,
+
             context,
 
             color_format,
@@ -573,6 +585,32 @@ impl Renderer {
                 )],
             )?,
         }))
+    }
+}
+
+impl<'a> Frame<'a> {
+    pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
+        let inflight = self.renderer._render(target, draw_data)?;
+        self.inflight = if let Some(prev) = std::mem::take(&mut self.inflight) {
+            Some(prev.join(inflight).boxed())
+        } else {
+            Some(inflight.boxed())
+        };
+        Ok(())
+    }
+
+    pub fn wait(mut self) -> Result<()> {
+        if let Some(inflight) = std::mem::take(&mut self.inflight) {
+            inflight.then_signal_fence_and_flush()?.wait(None)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a> Drop for Frame<'a> {
+    fn drop(&mut self) {
+        self.renderer.previous_frame = std::mem::take(&mut self.inflight);
     }
 }
 
