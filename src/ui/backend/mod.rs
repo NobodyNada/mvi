@@ -17,13 +17,15 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-mod render;
+pub mod render;
 
 const WINDOW_TITLE: &str = "mvi";
 
+// TODO: the bottom window of a vertically stacked configuration is offset
+
 pub fn run(
     mut event_callback: impl FnMut(&Event<()>, &mut Context, &Window) + 'static + Send,
-    mut render_callback: impl FnMut(&mut Ui) + 'static + Send,
+    mut render_callback: impl FnMut(&mut Ui, &mut render::Renderer) + 'static + Send,
 ) -> Result<()> {
     // Create the application event loop
     let event_loop = EventLoopBuilder::with_user_event().build();
@@ -40,6 +42,10 @@ pub fn run(
             // Allow us to use devices that do not fully support
             // the Vulkan specification, such as Apple graphics hardware.
             enumerate_portability: true,
+            ..Default::default()
+        },
+        device_features: vk::device::Features {
+            image_view_format_swizzle: true,
             ..Default::default()
         },
 
@@ -179,24 +185,18 @@ pub fn run(
                     ViewportEvent::SetPos(id, pos) => {
                         let window = &viewport_windows[&id].0;
                         window.set_outer_position(
-                            platform
-                                .scale_pos_for_winit(
-                                    window,
-                                    LogicalPosition::<f32>::from(pos).cast(),
-                                )
-                                .to_physical::<f64>(window.scale_factor()),
+                            platform.scale_pos_for_winit(
+                                window,
+                                LogicalPosition::<f32>::from(pos).cast(),
+                            ),
                         );
                         window.request_redraw();
                     }
                     ViewportEvent::SetSize(id, size) => {
                         let window = &viewport_windows[&id].0;
-                        window.set_inner_size(
-                            LogicalSize::<f32>::from(size)
-                                .to_physical::<f32>(
-                                    imgui.viewport_by_id(id).unwrap().dpi_scale as f64,
-                                )
-                                .to_logical::<f32>(window.scale_factor()),
-                        );
+                        window.set_inner_size(LogicalSize::<f32>::from(size).to_physical::<f32>(
+                            imgui.viewport_by_id(id).unwrap().dpi_scale as f64,
+                        ));
                     }
                     ViewportEvent::SetFocus(id) => viewport_windows[&id].0.focus_window(),
                     ViewportEvent::SetTitle(id, title) => viewport_windows[&id].0.set_title(&title),
@@ -248,14 +248,18 @@ pub fn run(
                         match e {
                             WindowEvent::Resized(new_size) => {
                                 target.invalidate();
-                                ViewportBackend::data(viewport).size = platform
+                                let new_size = platform
                                     .scale_size_from_winit(
                                         window,
                                         new_size.to_logical(window.scale_factor()),
                                     )
                                     .cast::<f32>()
                                     .into();
+                                ViewportBackend::data(viewport).size = new_size;
                                 viewport.platform_request_resize = true;
+                                if window_id == main_window_id {
+                                    imgui.io_mut().display_size = new_size;
+                                }
                             }
                             WindowEvent::Moved(new_pos) => {
                                 let new_pos = window.inner_position().unwrap_or(new_pos);
@@ -307,9 +311,9 @@ pub fn run(
             }
 
             // Now that we've cleared all events, render a frame.
+            imgui.io().display_size;
             let ui = imgui.frame();
-            ui.dockspace_over_main_viewport();
-            render_callback(ui);
+            render_callback(ui, &mut renderer);
             ui.end_frame_early();
 
             platform.prepare_render(ui, &window);

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, rc, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use imgui::{internal::RawWrapper, DrawData, DrawIdx, FontAtlasFlags, TextureId};
@@ -33,7 +36,7 @@ pub struct Renderer {
     sampler_descriptor_set_layout: Arc<vk::descriptor_set::layout::DescriptorSetLayout>,
 
     /// The textures that have been created.
-    textures: HashMap<TextureId, rc::Weak<Texture>>,
+    textures: HashMap<TextureId, Weak<Texture>>,
 
     /// Our buffer allocator.
     buffer_allocator:
@@ -45,7 +48,7 @@ pub struct Renderer {
     /// The next texture ID to be assigned.
     next_texture_id: usize,
 
-    font_texture: rc::Rc<Texture>,
+    _font_texture: Arc<Texture>,
 }
 
 pub struct Target {
@@ -56,7 +59,7 @@ pub struct Target {
 }
 
 pub struct Texture {
-    id: TextureId,
+    pub id: TextureId,
     descriptor: Arc<vk::descriptor_set::PersistentDescriptorSet>,
 }
 
@@ -116,7 +119,7 @@ mod shaders {
                     layout(location=0) out vec4 out_col;
 
                     void main() {
-                        out_col = frag_col * texture(tex, frag_uv).r;
+                        out_col = frag_col * texture(tex, frag_uv);
                     }
                 "
             }
@@ -126,6 +129,15 @@ mod shaders {
 
 impl Renderer {
     const FONT_TEXTURE_ID: TextureId = TextureId::new(0);
+
+    pub fn context(&self) -> &VulkanoContext {
+        &self.context
+    }
+    pub fn command_buffer_allocator(
+        &self,
+    ) -> &vk::command_buffer::allocator::StandardCommandBufferAllocator {
+        &self.command_buffer_allocator
+    }
 
     pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
         // Create a command buffer to store our rendering commands.
@@ -304,13 +316,19 @@ impl Renderer {
                 inflight.wait(None)?;
                 inflight.cleanup_finished();
             }
+            Err(vk::sync::FlushError::ResourceAccessError {
+                error: vk::sync::future::AccessError::UnexpectedImageLayout { allowed, requested },
+                ..
+            }) => {
+                bail!("Unexpected image layout (allowed: {allowed:?}, requested: {requested:?})");
+            }
             Err(vk::sync::FlushError::OutOfDate) => {
                 // This frame could not be rendered because the swapchain is no longer valid.
                 // Make sure we recreate it next time.
                 target.invalidate();
             }
             Err(e) => bail!(e), // Something went wrong; return the error so we can print it.
-        }
+        };
 
         Ok(())
     }
@@ -400,7 +418,15 @@ impl Renderer {
             &mut command_buffer,
         )?;
 
-        let create_info = vk::image::view::ImageViewCreateInfo::from_image(&font_image);
+        let create_info = vk::image::view::ImageViewCreateInfo {
+            component_mapping: vk::sampler::ComponentMapping {
+                r: vk::sampler::ComponentSwizzle::Red,
+                g: vk::sampler::ComponentSwizzle::Red,
+                b: vk::sampler::ComponentSwizzle::Red,
+                a: vk::sampler::ComponentSwizzle::One,
+            },
+            ..vk::image::view::ImageViewCreateInfo::from_image(&font_image)
+        };
         let font_image = vk::image::view::ImageView::new(font_image, create_info)?;
 
         // Create a sampler that describes how to access our image.
@@ -482,8 +508,7 @@ impl Renderer {
             &descriptor_set_allocator,
             sampler_descriptor_set_layout.clone(),
         )?;
-        let textures =
-            HashMap::from_iter([(Self::FONT_TEXTURE_ID, rc::Rc::downgrade(&font_texture))]);
+        let textures = HashMap::from_iter([(Self::FONT_TEXTURE_ID, Arc::downgrade(&font_texture))]);
 
         // Submit our upload commands to the GPU.
         command_buffer
@@ -505,7 +530,7 @@ impl Renderer {
             descriptor_set_allocator,
 
             sampler_descriptor_set_layout,
-            font_texture,
+            _font_texture: font_texture,
             textures,
             next_texture_id: Self::FONT_TEXTURE_ID.id() + 1,
 
@@ -518,7 +543,7 @@ impl Renderer {
     pub fn create_texture(
         &mut self,
         image_view: Arc<dyn vk::image::ImageViewAbstract>,
-    ) -> Result<rc::Rc<Texture>> {
+    ) -> Result<Arc<Texture>> {
         let id = TextureId::new(self.next_texture_id);
         let texture = Self::_create_texture(
             id,
@@ -527,7 +552,7 @@ impl Renderer {
             self.sampler_descriptor_set_layout.clone(),
         )?;
 
-        self.textures.insert(id, rc::Rc::downgrade(&texture));
+        self.textures.insert(id, Arc::downgrade(&texture));
         self.next_texture_id += 1;
         Ok(texture)
     }
@@ -537,8 +562,8 @@ impl Renderer {
         image_view: Arc<dyn vk::image::ImageViewAbstract>,
         descriptor_set_allocator: &vk::descriptor_set::allocator::StandardDescriptorSetAllocator,
         sampler_descriptor_set_layout: Arc<vk::descriptor_set::layout::DescriptorSetLayout>,
-    ) -> Result<rc::Rc<Texture>> {
-        Ok(rc::Rc::new(Texture {
+    ) -> Result<Arc<Texture>> {
+        Ok(Arc::new(Texture {
             id,
             descriptor: vk::descriptor_set::PersistentDescriptorSet::new(
                 descriptor_set_allocator,

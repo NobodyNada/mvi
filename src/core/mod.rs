@@ -1,137 +1,332 @@
 #![allow(dead_code)]
 
-use std::{ffi::c_void, sync::Mutex};
+use std::{
+    ffi::c_void,
+    ops::{Deref, DerefMut},
+    sync::{Mutex, RwLock},
+};
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{ensure, Result};
 use libloading::Library;
 use libretro_ffi::*;
 
-#[cfg(unix)]
-use libloading::os::unix::Symbol;
-
-#[cfg(windows)]
-use libloading::os::windows::Symbol;
+mod symbols;
+use symbols::CoreSymbols;
 
 pub struct Core {
+    pub system_info: retro_system_info,
+    pub av_info: retro_system_av_info,
+    pub frame: Frame,
+}
+unsafe impl Send for Core {}
+
+pub struct CoreImpl {
     library: Library,
-    symbols: CoreSymbols,
+    rom_buf: Option<Vec<u8>>,
+    pixel_format: PixelFormat,
+    frame: Frame,
 }
 
-static CORE_LOADED: Mutex<bool> = Mutex::new(false);
-impl Core {
-    pub unsafe fn load(path: &str) -> Result<Core> {
-        unsafe {
-            let mut lock = CORE_LOADED.lock().unwrap();
-            assert!(!*lock, "Only one core can be loaded at once");
+pub struct Frame {
+    pub width: usize,
+    pub height: usize,
+    pub buffer: Vec<[u8; 4]>,
+}
 
-            let library = libloading::Library::new(path)?;
-            let symbols = CoreSymbols::new(&library)?;
-            let result = Self { library, symbols };
+impl Frame {
+    pub fn blank(av_info: &retro_system_av_info) -> Self {
+        let width = av_info.geometry.base_width as usize;
+        let height = av_info.geometry.base_height as usize;
+        Frame {
+            width,
+            height,
+            buffer: std::iter::repeat([0, 0, 0, 255])
+                .take(width * height)
+                .collect(),
+        }
+    }
+}
+
+static CORE: Mutex<Option<CoreImpl>> = Mutex::new(None);
+static SYMBOLS: RwLock<Option<CoreSymbols>> = RwLock::new(None);
+impl Core {
+    pub unsafe fn load(path: &str, game_path: &str) -> Result<Core> {
+        unsafe {
+            CoreImpl::load(path)?;
+
+            let mut system_info = std::mem::MaybeUninit::uninit();
+            (symbols().retro_get_system_info)(system_info.as_mut_ptr());
+            let system_info = system_info.assume_init();
+
+            let game_info = if system_info.need_fullpath {
+                retro_game_info {
+                    path: game_path.as_bytes().as_ptr().cast(),
+                    data: std::ptr::null(),
+                    size: 0,
+                    meta: std::ptr::null(),
+                }
+            } else {
+                let buf = std::fs::read(game_path)?;
+                let (data, size) = (buf.as_ptr().cast(), buf.len());
+                lock().rom_buf = Some(buf);
+                retro_game_info {
+                    path: std::ptr::null(),
+                    data,
+                    size,
+                    meta: std::ptr::null(),
+                }
+            };
+
             ensure!(
-                result.retro_api_version() == RETRO_API_VERSION,
-                "core declares incompatible libretro version"
+                (symbols().retro_load_game)(&game_info),
+                "Failed to load game"
             );
 
-            *lock = true;
-            Ok(result)
+            let mut av_info = std::mem::MaybeUninit::uninit();
+            (symbols().retro_get_system_av_info)(av_info.as_mut_ptr());
+            let av_info = av_info.assume_init();
+
+            let core = Core {
+                system_info,
+                av_info: dbg!(av_info),
+                frame: Frame::blank(&av_info),
+            };
+            Ok(core)
         }
     }
-}
 
-impl Core {
-    pub fn retro_api_version(&self) -> u32 {
-        unsafe { (self.symbols.retro_api_version.unwrap())() }
+    pub fn lock(&mut self) -> impl DerefMut<Target = CoreImpl> {
+        lock()
+    }
+
+    pub fn run_frame(&mut self) {
+        let run = *symbols().retro_run;
+        unsafe {
+            run();
+        }
+
+        std::mem::swap(&mut self.frame, &mut lock().frame);
     }
 }
-
 impl Drop for Core {
     fn drop(&mut self) {
-        let mut lock = CORE_LOADED.lock().unwrap();
-        *lock = false;
+        let mut lock = CORE.lock().unwrap();
+        *lock = None;
     }
 }
 
-struct CoreSymbols {
-    retro_api_version: Symbol<retro_api_version_t>,
-
-    retro_set_environment: Symbol<retro_set_environment_t>,
-    retro_set_video_refresh: Symbol<retro_set_video_refresh_t>,
-    retro_set_audio_sample: Symbol<retro_set_audio_sample_t>,
-    retro_set_audio_sample_batch: Symbol<retro_set_audio_sample_batch_t>,
-    retro_set_input_poll: Symbol<retro_set_input_poll_t>,
-    retro_set_input_state: Symbol<retro_set_input_state_t>,
-
-    retro_init: Symbol<retro_init_t>,
-    retro_deinit: Symbol<retro_deinit_t>,
-
-    retro_get_system_info: Symbol<retro_get_system_info_t>,
-    retro_get_system_av_info: Symbol<retro_get_system_av_info_t>,
-
-    retro_set_controller_port_device: Symbol<retro_set_controller_port_device_t>,
-
-    retro_reset: Symbol<retro_reset_t>,
-    retro_run: Symbol<retro_run_t>,
-
-    retro_serialize_size: Symbol<retro_serialize_size_t>,
-    retro_serialize: Symbol<retro_serialize_t>,
-    retro_unserialize: Symbol<retro_unserialize_t>,
-
-    retro_load_game: Symbol<retro_load_game_t>,
-    retro_unload_game: Symbol<retro_unload_game_t>,
-
-    retro_get_region: Symbol<retro_get_region_t>,
-
-    retro_get_memory_data: Symbol<retro_get_memory_data_t>,
-    retro_get_memory_size: Symbol<retro_get_memory_size_t>,
+struct CoreGuard<T: Deref<Target = Option<CoreImpl>>>(T);
+impl<T: Deref<Target = Option<CoreImpl>>> Deref for CoreGuard<T> {
+    type Target = CoreImpl;
+    fn deref(&self) -> &Self::Target {
+        self.0.deref().as_ref().unwrap()
+    }
+}
+impl<T: DerefMut<Target = Option<CoreImpl>>> DerefMut for CoreGuard<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut().as_mut().unwrap()
+    }
+}
+struct SymbolsGuard<T: Deref<Target = Option<CoreSymbols>>>(T);
+impl<T: Deref<Target = Option<CoreSymbols>>> Deref for SymbolsGuard<T> {
+    type Target = CoreSymbols;
+    fn deref(&self) -> &Self::Target {
+        self.0.deref().as_ref().unwrap()
+    }
 }
 
-impl CoreSymbols {
-    fn new(library: &Library) -> Result<Self> {
-        unsafe {
-            Ok(CoreSymbols {
-                retro_api_version: Self::load_symbol(library, "retro_api_version")?,
-                retro_set_environment: Self::load_symbol(library, "retro_set_environment")?,
-                retro_set_video_refresh: Self::load_symbol(library, "retro_set_video_refresh")?,
-                retro_set_audio_sample: Self::load_symbol(library, "retro_set_audio_sample")?,
-                retro_set_audio_sample_batch: Self::load_symbol(
-                    library,
-                    "retro_set_audio_sample_batch",
-                )?,
-                retro_set_input_poll: Self::load_symbol(library, "retro_set_input_poll")?,
-                retro_set_input_state: Self::load_symbol(library, "retro_set_input_state")?,
-                retro_init: Self::load_symbol(library, "retro_init")?,
-                retro_deinit: Self::load_symbol(library, "retro_deinit")?,
-                retro_get_system_info: Self::load_symbol(library, "retro_get_system_info")?,
-                retro_get_system_av_info: Self::load_symbol(library, "retro_get_system_av_info")?,
-                retro_set_controller_port_device: Self::load_symbol(
-                    library,
-                    "retro_set_controller_port_device",
-                )?,
-                retro_reset: Self::load_symbol(library, "retro_reset")?,
-                retro_run: Self::load_symbol(library, "retro_run")?,
-                retro_serialize_size: Self::load_symbol(library, "retro_serialize_size")?,
-                retro_serialize: Self::load_symbol(library, "retro_serialize")?,
-                retro_unserialize: Self::load_symbol(library, "retro_unserialize")?,
-                retro_load_game: Self::load_symbol(library, "retro_load_game")?,
-                retro_unload_game: Self::load_symbol(library, "retro_unload_game")?,
-                retro_get_region: Self::load_symbol(library, "retro_get_region")?,
-                retro_get_memory_data: Self::load_symbol(library, "retro_get_memory_data")?,
-                retro_get_memory_size: Self::load_symbol(library, "retro_get_memory_size")?,
-            })
+fn lock() -> impl DerefMut<Target = CoreImpl> {
+    CoreGuard(CORE.lock().unwrap())
+}
+fn symbols() -> impl Deref<Target = CoreSymbols> {
+    SymbolsGuard(SYMBOLS.read().unwrap())
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug)]
+enum PixelFormat {
+    XRGB1555 = retro_pixel_format_RETRO_PIXEL_FORMAT_0RGB1555,
+    XRGB8888 = retro_pixel_format_RETRO_PIXEL_FORMAT_XRGB8888,
+    RGB565 = retro_pixel_format_RETRO_PIXEL_FORMAT_RGB565,
+}
+
+impl PixelFormat {
+    fn stride(&self) -> usize {
+        match self {
+            PixelFormat::XRGB1555 | PixelFormat::RGB565 => 2,
+            PixelFormat::XRGB8888 => 4,
         }
     }
 
-    unsafe fn load_symbol<T>(library: &Library, symbol: &str) -> Result<Symbol<Option<T>>> {
-        library
-            .get(symbol.as_bytes())
-            .map(|s: libloading::Symbol<Option<T>>| s.into_raw())
-            .map_err(|e| anyhow!("error loading symbol '{symbol}': {e:?}"))
-            .and_then(|s| {
-                if s.is_some() {
-                    Ok(s)
-                } else {
-                    bail!("Core does not declare symbol '{symbol}'")
-                }
-            })
+    unsafe fn read(&self, buf: *const c_void) -> [u8; 4] {
+        let pixel: u32 = match self {
+            PixelFormat::XRGB8888 => buf.cast::<u32>().read(),
+            PixelFormat::XRGB1555 | PixelFormat::RGB565 => buf.cast::<u16>().read() as u32,
+        };
+        self.convert(pixel)
     }
+
+    #[allow(clippy::identity_op)]
+    #[rustfmt::skip]
+    /// Converts a pixel from this format to R8G8B8A8.
+    fn convert(&self, pixel: u32) -> [u8; 4] {
+        match self {
+            PixelFormat::XRGB1555 => {
+                let r = ((pixel >> 10) & 0x1f) as u8;
+                let g = ((pixel >>  5) & 0x1f) as u8;
+                let b = ((pixel >>  0) & 0x1f) as u8;
+                [
+                    (r << 3) | (r & 0x7),
+                    (g << 3) | (g & 0x7),
+                    (b << 3) | (b & 0x7),
+                    0xff
+                ]
+            }
+            PixelFormat::XRGB8888 => [
+                (pixel >> 16) as u8,
+                (pixel >> 8) as u8,
+                (pixel >> 0) as u8,
+                0xff,
+            ],
+            PixelFormat::RGB565 => {
+                let r = ((pixel >> 11) & 0x1f) as u8;
+                let g = ((pixel >>  5) & 0x3f) as u8;
+                let b = ((pixel >>  0) & 0x1f) as u8;
+                [
+                    (r << 3) | (r & 0x7),
+                    (g << 2) | (g & 0x3),
+                    (b << 3) | (b & 0x7),
+                    0xff
+                ]
+            }
+        }
+    }
+}
+impl TryFrom<retro_pixel_format> for PixelFormat {
+    type Error = ();
+    fn try_from(value: retro_pixel_format) -> std::result::Result<Self, Self::Error> {
+        match value {
+            x if x == Self::XRGB1555 as retro_pixel_format => Ok(Self::XRGB1555),
+            x if x == Self::XRGB8888 as retro_pixel_format => Ok(Self::XRGB8888),
+            x if x == Self::RGB565 as retro_pixel_format => Ok(Self::RGB565),
+            _ => Err(()),
+        }
+    }
+}
+
+impl CoreImpl {
+    unsafe fn load(path: &str) -> Result<()> {
+        let mut lock = CORE.lock().unwrap();
+        assert!(lock.is_none(), "Only one core can be loaded at once");
+
+        let library = libloading::Library::new(path)?;
+        let symbols = CoreSymbols::new(&library)?;
+        *SYMBOLS.write().unwrap() = Some(symbols);
+        let result = CoreImpl {
+            library,
+            rom_buf: None,
+            pixel_format: PixelFormat::XRGB1555,
+            frame: Frame {
+                width: 0,
+                height: 0,
+                buffer: Vec::new(),
+            },
+        };
+        ensure!(
+            result.retro_api_version() == RETRO_API_VERSION,
+            "core declares incompatible libretro version"
+        );
+
+        *lock = Some(result);
+        std::mem::drop(lock);
+
+        let symbols = SYMBOLS.read().unwrap();
+        let symbols = symbols.as_ref().unwrap();
+        (symbols.retro_set_environment)(Some(environment_callback));
+        (symbols.retro_set_video_refresh)(Some(video_refresh_callback));
+        (symbols.retro_set_audio_sample)(Some(audio_sample_callback));
+        (symbols.retro_set_audio_sample_batch)(Some(audio_samples_callback));
+        (symbols.retro_set_input_poll)(Some(input_poll_callback));
+        (symbols.retro_set_input_state)(Some(input_state_callback));
+
+        (symbols.retro_init)();
+        Ok(())
+    }
+
+    pub fn retro_api_version(&self) -> u32 {
+        unsafe { (symbols().retro_api_version)() }
+    }
+
+    fn video_refresh_callback(
+        &mut self,
+        data: *const c_void,
+        width: u32,
+        height: u32,
+        pitch: usize,
+    ) {
+        let (width, height) = (width as usize, height as usize);
+        self.frame.width = width;
+        self.frame.height = height;
+
+        let buf = &mut self.frame.buffer;
+        buf.clear();
+        buf.reserve(width * height);
+
+        unsafe {
+            for y in 0..height {
+                let line = data.add(y * pitch);
+                for x in 0..width {
+                    let pixel = line.add(x * self.pixel_format.stride());
+                    buf.push(self.pixel_format.read(pixel));
+                }
+            }
+        }
+    }
+
+    fn audio_callback(&mut self, _data: &[AudioFrame]) {}
+
+    fn set_pixel_format(&mut self, format: retro_pixel_format) -> bool {
+        let Ok(pixel_format) = PixelFormat::try_from(format) else { return false };
+        self.pixel_format = dbg!(pixel_format);
+        true
+    }
+}
+
+unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
+    let mut core = lock();
+    match cmd {
+        RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
+        _ => false,
+    }
+}
+
+unsafe extern "C" fn video_refresh_callback(
+    data: *const c_void,
+    width: u32,
+    height: u32,
+    pitch: usize,
+) {
+    lock().video_refresh_callback(data, width, height, pitch)
+}
+
+unsafe extern "C" fn audio_sample_callback(l: i16, r: i16) {
+    lock().audio_callback(&[AudioFrame { l, r }]);
+}
+
+unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> usize {
+    lock().audio_callback(std::slice::from_raw_parts(data.cast(), frames));
+    frames
+}
+
+unsafe extern "C" fn input_poll_callback() {}
+
+unsafe extern "C" fn input_state_callback(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
+    0
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct AudioFrame {
+    l: i16,
+    r: i16,
 }

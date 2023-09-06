@@ -1,3 +1,4 @@
 /target
 /cores
 imgui.ini
+*.gputrace
