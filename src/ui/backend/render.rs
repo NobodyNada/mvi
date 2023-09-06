@@ -420,10 +420,10 @@ impl Renderer {
 
         let create_info = vk::image::view::ImageViewCreateInfo {
             component_mapping: vk::sampler::ComponentMapping {
-                r: vk::sampler::ComponentSwizzle::Red,
-                g: vk::sampler::ComponentSwizzle::Red,
-                b: vk::sampler::ComponentSwizzle::Red,
-                a: vk::sampler::ComponentSwizzle::One,
+                r: vk::sampler::ComponentSwizzle::One,
+                g: vk::sampler::ComponentSwizzle::One,
+                b: vk::sampler::ComponentSwizzle::One,
+                a: vk::sampler::ComponentSwizzle::Red,
             },
             ..vk::image::view::ImageViewCreateInfo::from_image(&font_image)
         };
