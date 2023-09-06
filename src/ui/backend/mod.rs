@@ -246,7 +246,8 @@ pub fn run(
                         let viewport = imgui.viewport_by_id_mut(viewport).unwrap();
 
                         match e {
-                            WindowEvent::Resized(new_size) => {
+                            WindowEvent::Resized(_new_size) => {
+                                let new_size = window.inner_size();
                                 target.invalidate();
                                 let new_size = platform
                                     .scale_size_from_winit(
@@ -311,7 +312,6 @@ pub fn run(
             }
 
             // Now that we've cleared all events, render a frame.
-            imgui.io().display_size;
             let ui = imgui.frame();
             render_callback(ui, &mut renderer);
             ui.end_frame_early();
