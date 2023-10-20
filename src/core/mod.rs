@@ -3,7 +3,10 @@
 use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
-    sync::{Mutex, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, RwLock,
+    },
 };
 
 use anyhow::{ensure, Result};
@@ -17,6 +20,8 @@ pub struct Core {
     pub system_info: retro_system_info,
     pub av_info: retro_system_av_info,
     pub frame: Frame,
+    id: usize,
+    savestate_size: usize,
 }
 unsafe impl Send for Core {}
 
@@ -31,6 +36,11 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub buffer: Vec<[u8; 4]>,
+}
+
+pub struct Savestate {
+    state: Box<[u8]>,
+    core_id: usize,
 }
 
 impl Frame {
@@ -49,6 +59,7 @@ impl Frame {
 
 static CORE: Mutex<Option<CoreImpl>> = Mutex::new(None);
 static SYMBOLS: RwLock<Option<CoreSymbols>> = RwLock::new(None);
+static ID: AtomicUsize = AtomicUsize::new(0);
 impl Core {
     pub unsafe fn load(path: &str, game_path: &str) -> Result<Core> {
         unsafe {
@@ -90,6 +101,8 @@ impl Core {
                 system_info,
                 av_info: dbg!(av_info),
                 frame: Frame::blank(&av_info),
+                id: ID.fetch_add(1, Ordering::Relaxed),
+                savestate_size: (symbols().retro_serialize_size)(),
             };
             Ok(core)
         }
@@ -106,6 +119,34 @@ impl Core {
         }
 
         std::mem::swap(&mut self.frame, &mut lock().frame);
+    }
+
+    pub fn save_state(&mut self) -> Savestate {
+        unsafe {
+            let state =
+                std::alloc::alloc(std::alloc::Layout::array::<u8>(self.savestate_size).unwrap());
+            assert!((symbols().retro_serialize)(
+                state.cast(),
+                self.savestate_size
+            ));
+            Savestate {
+                state: Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    state,
+                    self.savestate_size,
+                )),
+                core_id: self.id,
+            }
+        }
+    }
+
+    pub fn restore_state(&mut self, state: &Savestate) {
+        assert_eq!(state.core_id, self.id);
+        unsafe {
+            assert!((symbols().retro_unserialize)(
+                state.state.as_ptr().cast(),
+                state.state.len()
+            ));
+        }
     }
 }
 impl Drop for Core {
@@ -286,7 +327,9 @@ impl CoreImpl {
     fn audio_callback(&mut self, _data: &[AudioFrame]) {}
 
     fn set_pixel_format(&mut self, format: retro_pixel_format) -> bool {
-        let Ok(pixel_format) = PixelFormat::try_from(format) else { return false };
+        let Ok(pixel_format) = PixelFormat::try_from(format) else {
+            return false;
+        };
         self.pixel_format = dbg!(pixel_format);
         true
     }
@@ -320,7 +363,7 @@ unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> 
 
 unsafe extern "C" fn input_poll_callback() {}
 
-unsafe extern "C" fn input_state_callback(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
+unsafe extern "C" fn input_state_callback(port: u32, device: u32, index: u32, id: u32) -> i16 {
     0
 }
 

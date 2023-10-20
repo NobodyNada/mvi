@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::Result;
-use imgui::{BackendFlags, Context, Id, PlatformViewportBackend, Ui, ViewportFlags};
+use imgui::{
+    BackendFlags, Context, FontConfig, FontGlyphRanges, FontSource, Id, PlatformViewportBackend,
+    Ui, ViewportFlags,
+};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use vk::swapchain::Surface;
 use vulkano as vk;
@@ -24,8 +27,8 @@ const WINDOW_TITLE: &str = "mvi";
 // TODO: the bottom window of a vertically stacked configuration is offset
 
 pub fn run(
-    mut event_callback: impl FnMut(&Event<()>, &mut Context, &Window) + 'static + Send,
-    mut render_callback: impl FnMut(&mut Ui, &mut render::Renderer) + 'static + Send,
+    mut event_callback: impl FnMut(&Event<()>, &mut Context, &Window) + Send,
+    mut render_callback: impl FnMut(&mut Ui, &mut render::Renderer) + Send,
 ) -> Result<()> {
     // Create the application event loop
     let event_loop = EventLoopBuilder::with_user_event().build();
@@ -97,267 +100,292 @@ pub fn run(
     let (event_tx, event_rx) = mpsc::channel::<Event<'static, ()>>();
     let event_proxy = event_loop.create_proxy();
 
-    std::thread::spawn(move || {
-        // Initialize and configure imgui.
-        let mut imgui = Context::create();
-        imgui
-            .io_mut()
-            .config_flags
-            .insert(imgui::ConfigFlags::DOCKING_ENABLE | imgui::ConfigFlags::VIEWPORTS_ENABLE);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Initialize and configure imgui.
+            let mut imgui = Context::create();
+            imgui
+                .io_mut()
+                .config_flags
+                .insert(imgui::ConfigFlags::DOCKING_ENABLE | imgui::ConfigFlags::VIEWPORTS_ENABLE);
 
-        let mut platform = WinitPlatform::init(&mut imgui);
-        platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
-        imgui.platform_io_mut().monitors.replace_from_slice(
-            &window
-                .available_monitors()
-                .map(|monitor| imgui::PlatformMonitor {
-                    main_pos: monitor.position().cast::<f32>().into(),
-                    work_pos: monitor.position().cast::<f32>().into(),
-                    main_size: monitor.size().cast::<f32>().into(),
-                    work_size: monitor.size().cast::<f32>().into(),
-                    dpi_scale: monitor.scale_factor() as f32,
-                })
-                .collect::<Vec<_>>(),
-        );
+            let mut platform = WinitPlatform::init(&mut imgui);
+            platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+            imgui.platform_io_mut().monitors.replace_from_slice(
+                &window
+                    .available_monitors()
+                    .map(|monitor| imgui::PlatformMonitor {
+                        main_pos: monitor.position().cast::<f32>().into(),
+                        work_pos: monitor.position().cast::<f32>().into(),
+                        main_size: monitor.size().cast::<f32>().into(),
+                        work_size: monitor.size().cast::<f32>().into(),
+                        dpi_scale: monitor.scale_factor() as f32,
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
-        // Create and initialize our renderer with a Vulkan surface.
-        let mut renderer = render::Renderer::new(vk_context, &surface, &mut imgui).unwrap();
+            // Define our font.
+            const ARROW_GLYPHS: [u32; 3] = ['←' as u32, '↓' as u32, 0]; // ←→↑↓
+            let font_config = FontConfig {
+                oversample_v: 1,
+                oversample_h: 1,
+                ..Default::default()
+            };
+            imgui.fonts().add_font(&[
+                FontSource::DefaultFontData {
+                    config: Some(font_config.clone()),
+                },
+                FontSource::TtfData {
+                    data: include_bytes!("./arrows.ttf"),
+                    size_pixels: 13.,
+                    config: Some(FontConfig {
+                        glyph_ranges: FontGlyphRanges::from_slice(dbg!(&ARROW_GLYPHS)),
+                        ..font_config
+                    }),
+                },
+            ]);
 
-        let mut target = render::Target::new(surface);
+            // Create and initialize our renderer with a Vulkan surface.
+            let mut renderer = render::Renderer::new(vk_context, &surface, &mut imgui).unwrap();
 
-        let main_viewport = imgui.main_viewport_mut();
-        ViewportBackend::initialize_viewport_data(main_viewport);
-        ViewportBackend::data(main_viewport).pos = platform
-            .scale_pos_from_winit(
-                &window,
-                window
-                    .inner_position()
-                    .unwrap_or_default()
-                    .to_logical(window.scale_factor()),
-            )
-            .cast::<f32>()
-            .into();
-        let mut viewport_windows = HashMap::<Id, (Arc<Window>, render::Target)>::new();
-        let (viewport_backend, viewport_events) = ViewportBackend::new();
-        imgui.set_platform_backend(viewport_backend);
-        imgui.set_renderer_backend(RendererViewportBackend {});
+            let mut target = render::Target::new(surface);
 
-        imgui
-            .io_mut()
-            .backend_flags
-            .insert(BackendFlags::PLATFORM_HAS_VIEWPORTS | BackendFlags::RENDERER_HAS_VIEWPORTS);
+            let main_viewport = imgui.main_viewport_mut();
+            ViewportBackend::initialize_viewport_data(main_viewport);
+            ViewportBackend::data(main_viewport).pos = platform
+                .scale_pos_from_winit(
+                    &window,
+                    window
+                        .inner_position()
+                        .unwrap_or_default()
+                        .to_logical(window.scale_factor()),
+                )
+                .cast::<f32>()
+                .into();
+            let mut viewport_windows = HashMap::<Id, (Arc<Window>, render::Target)>::new();
+            let (viewport_backend, viewport_events) = ViewportBackend::new();
+            imgui.set_platform_backend(viewport_backend);
+            imgui.set_renderer_backend(RendererViewportBackend {});
 
-        // We're done initializing, start the render loop!
-        'main_loop: loop {
-            // Handle viewport events first.
-            for viewport_event in viewport_events.borrow_mut().drain(..) {
-                match viewport_event {
-                    ViewportEvent::Create(id) => {
-                        let viewport = imgui.viewport_by_id_mut(id).unwrap();
-                        let window_builder = WindowBuilder::new()
-                            .with_title(WINDOW_TITLE)
-                            .with_decorations(
-                                !viewport.flags.contains(ViewportFlags::NO_DECORATION),
-                            );
+            imgui.io_mut().backend_flags.insert(
+                BackendFlags::PLATFORM_HAS_VIEWPORTS | BackendFlags::RENDERER_HAS_VIEWPORTS,
+            );
 
-                        let response =
-                            Arc::<(Condvar, Mutex<Option<CreateWindowResponse>>)>::default();
-                        event_proxy
-                            .send_event(UserEvent::CreateWindow {
-                                request: Box::new(window_builder),
-                                response: response.clone(),
-                            })
-                            .unwrap();
-                        let CreateWindowResponse { window, surface } = response
-                            .0
-                            .wait_while(response.1.lock().unwrap(), |w| w.is_none())
-                            .unwrap()
-                            .take()
-                            .unwrap();
+            // We're done initializing, start the render loop!
+            'main_loop: loop {
+                // Handle viewport events first.
+                for viewport_event in viewport_events.borrow_mut().drain(..) {
+                    match viewport_event {
+                        ViewportEvent::Create(id) => {
+                            let viewport = imgui.viewport_by_id_mut(id).unwrap();
+                            let window_builder = WindowBuilder::new()
+                                .with_title(WINDOW_TITLE)
+                                .with_decorations(
+                                    !viewport.flags.contains(ViewportFlags::NO_DECORATION),
+                                );
 
-                        viewport.dpi_scale = window.scale_factor().round() as f32;
-                        viewport_windows.insert(id, (window, render::Target::new(surface)));
-                    }
-                    ViewportEvent::Destroy(id) => {
-                        viewport_windows.remove(&id);
-                    }
-                    ViewportEvent::Show(id) => viewport_windows[&id].0.set_visible(true),
-                    ViewportEvent::SetPos(id, pos) => {
-                        let window = &viewport_windows[&id].0;
-                        window.set_outer_position(
-                            platform.scale_pos_for_winit(
+                            let response =
+                                Arc::<(Condvar, Mutex<Option<CreateWindowResponse>>)>::default();
+                            event_proxy
+                                .send_event(UserEvent::CreateWindow {
+                                    request: Box::new(window_builder),
+                                    response: response.clone(),
+                                })
+                                .unwrap();
+                            let CreateWindowResponse { window, surface } = response
+                                .0
+                                .wait_while(response.1.lock().unwrap(), |w| w.is_none())
+                                .unwrap()
+                                .take()
+                                .unwrap();
+
+                            viewport.dpi_scale = window.scale_factor().round() as f32;
+                            viewport_windows.insert(id, (window, render::Target::new(surface)));
+                        }
+                        ViewportEvent::Destroy(id) => {
+                            viewport_windows.remove(&id);
+                        }
+                        ViewportEvent::Show(id) => viewport_windows[&id].0.set_visible(true),
+                        ViewportEvent::SetPos(id, pos) => {
+                            let window = &viewport_windows[&id].0;
+                            window.set_outer_position(platform.scale_pos_for_winit(
                                 window,
                                 LogicalPosition::<f32>::from(pos).cast(),
-                            ),
-                        );
-                        window.request_redraw();
+                            ));
+                            window.request_redraw();
+                        }
+                        ViewportEvent::SetSize(id, size) => {
+                            let window = &viewport_windows[&id].0;
+                            window.set_inner_size(
+                                LogicalSize::<f32>::from(size).to_physical::<f32>(
+                                    imgui.viewport_by_id(id).unwrap().dpi_scale as f64,
+                                ),
+                            );
+                        }
+                        ViewportEvent::SetFocus(id) => viewport_windows[&id].0.focus_window(),
+                        ViewportEvent::SetTitle(id, title) => {
+                            viewport_windows[&id].0.set_title(&title)
+                        }
+                        ViewportEvent::SetAlpha(_, _) => {}
                     }
-                    ViewportEvent::SetSize(id, size) => {
-                        let window = &viewport_windows[&id].0;
-                        window.set_inner_size(LogicalSize::<f32>::from(size).to_physical::<f32>(
-                            imgui.viewport_by_id(id).unwrap().dpi_scale as f64,
-                        ));
+                }
+
+                for event in event_rx.try_iter() {
+                    if let Event::WindowEvent {
+                        window_id: _,
+                        event:
+                            WindowEvent::Resized(PhysicalSize {
+                                width: u32::MAX,
+                                height: u32::MAX,
+                            }),
+                    } = event
+                    {
+                        // https://github.com/rust-windowing/winit/issues/2876
+                        continue;
                     }
-                    ViewportEvent::SetFocus(id) => viewport_windows[&id].0.focus_window(),
-                    ViewportEvent::SetTitle(id, title) => viewport_windows[&id].0.set_title(&title),
-                    ViewportEvent::SetAlpha(_, _) => {}
-                }
-            }
+                    event_callback(&event, &mut imgui, &window);
 
-            for event in event_rx.try_iter() {
-                if let Event::WindowEvent {
-                    window_id: _,
-                    event:
-                        WindowEvent::Resized(PhysicalSize {
-                            width: u32::MAX,
-                            height: u32::MAX,
-                        }),
-                } = event
-                {
-                    // https://github.com/rust-windowing/winit/issues/2876
-                    continue;
-                }
-                event_callback(&event, &mut imgui, &window);
+                    if !matches!(event, Event::WindowEvent { .. }) {
+                        platform.handle_event(imgui.io_mut(), &window, &event);
+                    }
 
-                if !matches!(event, Event::WindowEvent { .. }) {
-                    platform.handle_event(imgui.io_mut(), &window, &event);
-                }
+                    #[allow(clippy::single_match)]
+                    match event {
+                        Event::WindowEvent {
+                            window_id,
+                            event: e,
+                        } => {
+                            let main_window = &window;
+                            let main_window_id = window.id();
+                            let (viewport, window, target) = if window_id == main_window_id {
+                                (imgui.main_viewport().id, &*window, &mut target)
+                            } else if let Some((viewport, (window, target))) = viewport_windows
+                                .iter_mut()
+                                .find(|(_v, (w, _t))| window_id == w.id())
+                            {
+                                (*viewport, &**window, target)
+                            } else {
+                                // the event is not for us
+                                return;
+                            };
 
-                #[allow(clippy::single_match)]
-                match event {
-                    Event::WindowEvent {
-                        window_id,
-                        event: e,
-                    } => {
-                        let main_window = &window;
-                        let main_window_id = window.id();
-                        let (viewport, window, target) = if window_id == main_window_id {
-                            (imgui.main_viewport().id, &*window, &mut target)
-                        } else if let Some((viewport, (window, target))) = viewport_windows
-                            .iter_mut()
-                            .find(|(_v, (w, _t))| window_id == w.id())
-                        {
-                            (*viewport, &**window, target)
-                        } else {
-                            // the event is not for us
-                            return;
-                        };
+                            let viewport = imgui.viewport_by_id_mut(viewport).unwrap();
 
-                        let viewport = imgui.viewport_by_id_mut(viewport).unwrap();
-
-                        match e {
-                            WindowEvent::Resized(_new_size) => {
-                                let new_size = window.inner_size();
-                                target.invalidate();
-                                let new_size = platform
-                                    .scale_size_from_winit(
-                                        window,
-                                        new_size.to_logical(window.scale_factor()),
-                                    )
-                                    .cast::<f32>()
-                                    .into();
-                                ViewportBackend::data(viewport).size = new_size;
-                                viewport.platform_request_resize = true;
-                                if window_id == main_window_id {
-                                    imgui.io_mut().display_size = new_size;
+                            match e {
+                                WindowEvent::Resized(_new_size) => {
+                                    let new_size = window.inner_size();
+                                    target.invalidate();
+                                    let new_size = platform
+                                        .scale_size_from_winit(
+                                            window,
+                                            new_size.to_logical(window.scale_factor()),
+                                        )
+                                        .cast::<f32>()
+                                        .into();
+                                    ViewportBackend::data(viewport).size = new_size;
+                                    viewport.platform_request_resize = true;
+                                    if window_id == main_window_id {
+                                        imgui.io_mut().display_size = new_size;
+                                    }
                                 }
-                            }
-                            WindowEvent::Moved(new_pos) => {
-                                let new_pos = window.inner_position().unwrap_or(new_pos);
-                                ViewportBackend::data(viewport).pos = platform
-                                    .scale_pos_from_winit(
-                                        window,
-                                        new_pos.to_logical(window.scale_factor()),
-                                    )
-                                    .cast::<f32>()
-                                    .into();
-                                viewport.platform_request_move = true;
-                            }
-                            WindowEvent::Focused(focused) => {
-                                ViewportBackend::data(viewport).focused = focused;
-                            }
-                            WindowEvent::CloseRequested => {
-                                viewport.platform_request_close = true;
-                                if window.id() == main_window_id {
-                                    break 'main_loop;
+                                WindowEvent::Moved(new_pos) => {
+                                    let new_pos = window.inner_position().unwrap_or(new_pos);
+                                    ViewportBackend::data(viewport).pos = platform
+                                        .scale_pos_from_winit(
+                                            window,
+                                            new_pos.to_logical(window.scale_factor()),
+                                        )
+                                        .cast::<f32>()
+                                        .into();
+                                    viewport.platform_request_move = true;
                                 }
-                            }
-                            WindowEvent::CursorMoved { position, .. } => {
-                                let window_pos = window.inner_position().unwrap_or_default();
-                                let physical = PhysicalPosition::new(
-                                    position.x + window_pos.x as f64,
-                                    position.y + window_pos.y as f64,
-                                );
-                                let logical: LogicalPosition<f64> =
-                                    physical.to_logical(viewport.dpi_scale as f64);
-                                imgui
-                                    .io_mut()
-                                    .add_mouse_pos_event([logical.x as f32, logical.y as f32])
-                            }
-                            e => {
-                                // yikes...
-                                platform.handle_event(
-                                    imgui.io_mut(),
-                                    main_window,
-                                    &Event::WindowEvent::<()> {
-                                        window_id: main_window.id(),
-                                        event: e,
-                                    },
-                                );
+                                WindowEvent::Focused(focused) => {
+                                    ViewportBackend::data(viewport).focused = focused;
+                                }
+                                WindowEvent::CloseRequested => {
+                                    viewport.platform_request_close = true;
+                                    if window.id() == main_window_id {
+                                        break 'main_loop;
+                                    }
+                                }
+                                WindowEvent::CursorMoved { position, .. } => {
+                                    let window_pos = window.inner_position().unwrap_or_default();
+                                    let physical = PhysicalPosition::new(
+                                        position.x + window_pos.x as f64,
+                                        position.y + window_pos.y as f64,
+                                    );
+                                    let logical: LogicalPosition<f64> =
+                                        physical.to_logical(viewport.dpi_scale as f64);
+                                    imgui
+                                        .io_mut()
+                                        .add_mouse_pos_event([logical.x as f32, logical.y as f32])
+                                }
+                                e => {
+                                    // yikes...
+                                    platform.handle_event(
+                                        imgui.io_mut(),
+                                        main_window,
+                                        &Event::WindowEvent::<()> {
+                                            window_id: main_window.id(),
+                                            event: e,
+                                        },
+                                    );
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
+
+                // Now that we've cleared all events, render a frame.
+                let ui = imgui.frame();
+                render_callback(ui, &mut renderer);
+                ui.end_frame_early();
+
+                platform.prepare_render(ui, &window);
+                imgui.update_platform_windows();
+                let mut frame = renderer.begin();
+
+                frame.render(&mut target, imgui.render()).unwrap();
+
+                for (viewport, (_w, target)) in &mut viewport_windows {
+                    let viewport = imgui.viewport_by_id_mut(*viewport).unwrap();
+                    frame.render(target, viewport.draw_data()).unwrap();
+                }
+
+                frame.wait().unwrap();
             }
 
-            // Now that we've cleared all events, render a frame.
-            let ui = imgui.frame();
-            render_callback(ui, &mut renderer);
-            ui.end_frame_early();
+            event_proxy.send_event(UserEvent::Exit).unwrap();
+        });
 
-            platform.prepare_render(ui, &window);
-            imgui.update_platform_windows();
-            let mut frame = renderer.begin();
+        // Run the event loop.
+        event_loop.run(move |event, window_target, control_flow| {
+            control_flow.set_wait();
 
-            frame.render(&mut target, imgui.render()).unwrap();
-
-            for (viewport, (_w, target)) in &mut viewport_windows {
-                let viewport = imgui.viewport_by_id_mut(*viewport).unwrap();
-                frame.render(target, viewport.draw_data()).unwrap();
-            }
-
-            frame.wait().unwrap();
-        }
-
-        event_proxy.send_event(UserEvent::Exit).unwrap();
-    });
-
-    // Run the event loop.
-    event_loop.run(move |event, window_target, control_flow| {
-        control_flow.set_wait();
-
-        match event {
-            Event::UserEvent(e) => match e {
-                UserEvent::Exit => control_flow.set_exit_with_code(0),
-                UserEvent::CreateWindow { request, response } => {
-                    let window = Arc::new(request.build(window_target).unwrap());
-                    let surface = vulkano_win::create_surface_from_handle(
-                        window.clone(),
-                        vk_instance.clone(),
-                    )
-                    .unwrap();
-                    *response.1.lock().unwrap() = Some(CreateWindowResponse { window, surface });
-                    response.0.notify_one();
-                }
-            },
-            e => {
-                if let Some(event) = e.map_nonuser_event().unwrap().to_static() {
-                    _ = event_tx.send(event);
+            match event {
+                Event::UserEvent(e) => match e {
+                    UserEvent::Exit => control_flow.set_exit_with_code(0),
+                    UserEvent::CreateWindow { request, response } => {
+                        let window = Arc::new(request.build(window_target).unwrap());
+                        let surface = vulkano_win::create_surface_from_handle(
+                            window.clone(),
+                            vk_instance.clone(),
+                        )
+                        .unwrap();
+                        *response.1.lock().unwrap() =
+                            Some(CreateWindowResponse { window, surface });
+                        response.0.notify_one();
+                    }
+                },
+                e => {
+                    if let Some(event) = e.map_nonuser_event().unwrap().to_static() {
+                        _ = event_tx.send(event);
+                    }
                 }
             }
-        }
-    });
+        });
+    })
 }
 
 /// This callback will be invoked whenever the Vulkan API generates a debug message.
