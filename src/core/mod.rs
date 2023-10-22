@@ -16,6 +16,8 @@ use libretro_ffi::*;
 mod symbols;
 use symbols::CoreSymbols;
 
+use crate::tas::input::InputPort;
+
 pub struct Core {
     pub system_info: retro_system_info,
     pub av_info: retro_system_av_info,
@@ -30,7 +32,12 @@ pub struct CoreImpl {
     rom_buf: Option<Vec<u8>>,
     pixel_format: PixelFormat,
     frame: Frame,
+    input: Vec<u8>,
+    input_port: Option<InputPort>,
 }
+
+// The input_callback cannot be safely sent across threads, but we are careful to never do so.
+unsafe impl Send for CoreImpl {}
 
 pub struct Frame {
     pub width: usize,
@@ -112,9 +119,10 @@ impl Core {
         lock()
     }
 
-    pub fn run_frame(&mut self) {
+    pub fn run_frame(&mut self, input: &[u8], input_port: crate::tas::input::InputPort) {
         let run = *symbols().retro_run;
         unsafe {
+            self.lock().set_input(input, input_port);
             run();
         }
 
@@ -272,6 +280,8 @@ impl CoreImpl {
                 height: 0,
                 buffer: Vec::new(),
             },
+            input: Vec::new(),
+            input_port: None,
         };
         ensure!(
             result.retro_api_version() == RETRO_API_VERSION,
@@ -296,6 +306,12 @@ impl CoreImpl {
 
     pub fn retro_api_version(&self) -> u32 {
         unsafe { (symbols().retro_api_version)() }
+    }
+
+    fn set_input(&mut self, input: &[u8], port: InputPort) {
+        self.input.clear();
+        self.input.extend_from_slice(input);
+        self.input_port = Some(port);
     }
 
     fn video_refresh_callback(
@@ -333,6 +349,10 @@ impl CoreImpl {
         self.pixel_format = dbg!(pixel_format);
         true
     }
+
+    fn no_input_callback(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
+        unreachable!()
+    }
 }
 
 unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
@@ -363,8 +383,13 @@ unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> 
 
 unsafe extern "C" fn input_poll_callback() {}
 
-unsafe extern "C" fn input_state_callback(port: u32, device: u32, index: u32, id: u32) -> i16 {
-    0
+unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 {
+    let core = lock();
+    if port == 0 {
+        core.input_port.unwrap().read(&core.input, index, id)
+    } else {
+        0
+    }
 }
 
 #[repr(C)]

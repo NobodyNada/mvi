@@ -2,10 +2,7 @@ use std::collections::VecDeque;
 
 use imgui::{ListClipper, Ui};
 
-use crate::tas::{
-    input::{InputPort, Joypad},
-    Tas,
-};
+use crate::tas::{input::InputPort, Tas};
 
 pub struct PianoRoll {
     last_selection: u32,
@@ -31,6 +28,7 @@ impl PianoRoll {
     const FRAMENO_COLOR: [f32; 4] = color![116, 128, 160];
     const SELECTED_FRAMENO_COLOR: [f32; 4] = color![0, 0, 0];
     const UNPRESSED_COLOR: [f32; 4] = color![45, 49, 55];
+    const PRESSED_COLOR: [f32; 4] = color![255, 255, 255];
     const SELECT_HIGHLIGHT: [f32; 4] = color![128, 128, 128];
     const GREENZONE_HIGHLIGHT: [f32; 4] = color![16, 32, 16];
 
@@ -54,7 +52,7 @@ impl PianoRoll {
         ui.window("Piano Roll")
             .size([256., 768.], imgui::Condition::FirstUseEver)
             .build(|| {
-                let rows = tas.movie_len();
+                let rows = tas.movie().len();
 
                 let _style = ui.push_style_var(imgui::StyleVar::ItemSpacing([0., 0.]));
                 if tas.selected_frame() != self.last_selection {
@@ -66,7 +64,8 @@ impl PianoRoll {
 
                 let clipper = ListClipper::new(rows.try_into().unwrap()).begin(ui);
 
-                let buttons = match tas.input_port() {
+                let input_port = tas.movie().input_port();
+                let buttons = match input_port {
                     InputPort::Joypad(j) => j.buttons(),
                 };
                 let number_column_width = rows.saturating_sub(1).ilog10() + 1;
@@ -78,7 +77,9 @@ impl PianoRoll {
                 for row in clipper.iter() {
                     let (highlight, frameno_color) = if row as u32 == tas.selected_frame() {
                         (Some(Self::SELECT_HIGHLIGHT), Self::SELECTED_FRAMENO_COLOR)
-                    } else if tas.greenzone().restore(row as u32).0 == row as u32 {
+                    } else if tas.movie().greenzone().restore((row + 1) as u32).0
+                        == (row + 1) as u32
+                    {
                         (Some(Self::GREENZONE_HIGHLIGHT), Self::FRAMENO_COLOR)
                     } else {
                         (None, Self::FRAMENO_COLOR)
@@ -108,9 +109,22 @@ impl PianoRoll {
                         format!("{marker}{row:width$} ", width = number_column_width),
                     );
 
-                    for text in buttons {
+                    for (index, text) in buttons.iter().enumerate() {
+                        let frame = tas.frame(row as u32);
+                        let pressed = input_port.read(frame, 0, index as u32);
+                        let color = if pressed != 0 {
+                            Self::PRESSED_COLOR
+                        } else {
+                            Self::UNPRESSED_COLOR
+                        };
+
                         ui.same_line();
-                        ui.text_colored(Self::UNPRESSED_COLOR, text);
+                        ui.text_colored(color, text);
+
+                        if ui.is_item_clicked() {
+                            let frame = tas.frame_mut(row as u32);
+                            input_port.write(frame, 0, index as u32, (pressed == 0) as i16);
+                        }
                     }
                 }
             });

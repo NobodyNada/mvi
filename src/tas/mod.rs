@@ -4,10 +4,11 @@ use anyhow::Result;
 
 use crate::core::{self, Core};
 
-use self::greenzone::Greenzone;
+use self::{greenzone::Greenzone, movie::Movie};
 
 mod greenzone;
 pub mod input;
+pub mod movie;
 
 pub struct Tas {
     core: Core,
@@ -25,12 +26,10 @@ pub struct Tas {
     core_frame_fraction: f32,
 
     // Editor state
-    greenzone: Greenzone,
     selected_frame: u32,
     selection_locked: bool,
 
-    input_port: input::InputPort,
-    data: Vec<u8>,
+    movie: Movie,
 }
 
 pub struct Frame {}
@@ -61,29 +60,25 @@ impl Tas {
         };
 
         let input_port = input::InputPort::Joypad(input::Joypad::Snes);
-        // Create an empty frame of input.
-        let mut data = Vec::new();
-        data.resize(input_port.frame_size(), 0);
-        input_port.default(&mut data);
 
+        let frame_0 = core.save_state();
+
+        let movie = Movie::new(input_port, frame_0);
         Ok(Tas {
             playback_cursor: 0,
             next_emulator_frame: 0,
             run_mode: RunMode::Running {
                 stop_at: None,
-                record_mode: RecordMode::Insert(data.clone()),
+                record_mode: RecordMode::Insert(movie.default_frame().to_vec()),
             },
             last_host_frame: Instant::now(),
             core_frame_fraction: 0.,
 
-            greenzone: Greenzone::new(core.save_state()),
             selected_frame: 0,
             selection_locked: true,
 
+            movie,
             core,
-
-            input_port,
-            data,
         })
     }
 
@@ -95,14 +90,20 @@ impl Tas {
         self.playback_cursor
     }
 
-    pub fn greenzone(&self) -> &Greenzone {
-        &self.greenzone
+    pub fn movie(&self) -> &Movie {
+        &self.movie
     }
 
     pub fn run_guest_frame(&mut self) -> &core::Frame {
-        self.core.run_frame();
+        let frame = if self.next_emulator_frame < self.movie.len() {
+            self.movie.frame(self.next_emulator_frame)
+        } else {
+            self.movie.default_frame()
+        };
+        self.core.run_frame(frame, self.movie.input_port);
         self.next_emulator_frame += 1;
-        self.greenzone
+        self.movie
+            .greenzone
             .save(self.next_emulator_frame, self.core.save_state());
         if self.playback_cursor < self.next_emulator_frame - 1 {
             let n = self.next_emulator_frame - self.playback_cursor - 1;
@@ -154,12 +155,13 @@ impl Tas {
                     match record_mode {
                         RecordMode::ReadOnly => {}
                         RecordMode::Insert(data) => {
-                            assert!(data.len() == self.input_port.frame_size());
+                            assert!(data.len() == self.movie.frame_size());
                             self.insert(self.playback_cursor + 1, data);
                         }
                         RecordMode::Overwrite(data) => {
-                            assert!(data.len() == self.input_port.frame_size());
-                            self.frame_mut(self.playback_cursor + 1)
+                            assert!(data.len() == self.movie.frame_size());
+                            self.movie
+                                .frame_mut(self.playback_cursor + 1)
                                 .copy_from_slice(data);
                         }
                     }
@@ -190,50 +192,41 @@ impl Tas {
         self.core.av_info
     }
 
-    pub fn input_port(&self) -> &input::InputPort {
-        &self.input_port
-    }
-
-    pub fn movie_len(&self) -> u32 {
-        (self.data.len() / self.input_port.frame_size()) as u32
-    }
-
     /// Invalidates the greenzone after the specified index.
     /// In other words: the savestate at the beginning of this frame is valid, but this frame's
     /// input may have changed.
     pub fn invalidate(&mut self, after: u32) {
-        self.greenzone.invalidate(after);
+        self.movie.greenzone.invalidate(after);
         if self.next_emulator_frame > after {
-            let (f, state) = self.greenzone.restore(after);
+            let (f, state) = self.movie.greenzone.restore(after);
             self.next_emulator_frame = f;
             self.core.restore_state(state);
         }
     }
 
     pub fn frame(&self, idx: u32) -> &[u8] {
-        let size = self.input_port.frame_size();
-        &self.data[idx as usize * size..][..size]
+        self.movie.frame(idx)
     }
 
     pub fn frame_mut(&mut self, idx: u32) -> &mut [u8] {
         self.invalidate(idx);
-        let size = self.input_port.frame_size();
-        &mut self.data[idx as usize * size..][..size]
+        self.movie.frame_mut(idx)
     }
 
     pub fn insert(&mut self, idx: u32, buf: &[u8]) {
-        let size = self.input_port.frame_size();
+        let size = self.movie.frame_size();
         assert_eq!(buf.len() % size, 0);
         self.invalidate(idx);
 
         let insert_idx = idx as usize * size;
-        self.data
+        self.movie
+            .data
             .splice(insert_idx..insert_idx, buf.iter().cloned());
     }
 
     pub fn seek_to(&mut self, frame: u32) {
         self.playback_cursor = frame;
-        let (f, state) = self.greenzone.restore(frame);
+        let (f, state) = self.movie.greenzone.restore(frame);
         self.next_emulator_frame = f;
         self.core.restore_state(state);
     }
@@ -252,7 +245,7 @@ impl Tas {
     }
 
     pub fn select_next(&mut self, n: u32) {
-        let n = n.min(self.movie_len().saturating_sub(self.selected_frame() + 1) as u32);
+        let n = n.min(self.movie.len().saturating_sub(self.selected_frame() + 1) as u32);
         self.selected_frame += n;
         if self.selection_locked {
             self.seek_to(self.playback_cursor + n);

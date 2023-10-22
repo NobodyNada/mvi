@@ -1,3 +1,4 @@
+#[derive(Copy, Clone, Debug)]
 pub enum InputPort {
     Joypad(Joypad),
 }
@@ -44,12 +45,13 @@ impl InputPort {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum Joypad {
     Snes,
 }
 
 impl Joypad {
-    pub fn buttons(&self) -> &[&str] {
+    pub fn buttons(&self) -> &'static [&'static str] {
         match self {
             Joypad::Snes => &["B", "Y", "s", "S", "↑", "↓", "←", "→", "A", "X", "L", "R"],
         }
@@ -69,7 +71,15 @@ impl Joypad {
     pub fn write(&self, data: &mut [u8], id: u32, value: bool) {
         assert!((id as usize) < self.buttons().len());
         match self {
-            Joypad::Snes => data[id as usize / 8] |= (value as u8) << (id as usize % 8),
+            Joypad::Snes => {
+                let byte = &mut data[id as usize / 8];
+                let mask = 1 << (id as usize % 8);
+                if value {
+                    *byte |= mask;
+                } else {
+                    *byte &= !mask;
+                }
+            }
         }
     }
 
