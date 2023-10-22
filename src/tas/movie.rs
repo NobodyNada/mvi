@@ -24,14 +24,32 @@ impl Movie {
     }
 
     pub fn frame(&self, idx: u32) -> &[u8] {
-        let size = self.input_port.frame_size();
-        &self.data[idx as usize * size..][..size]
+        if idx < self.len() {
+            let size = self.input_port.frame_size();
+            &self.data[idx as usize * size..][..size]
+        } else {
+            // If the frame is past the end of the movie, return a blank frame.
+            self.default_frame()
+        }
     }
 
     pub(super) fn frame_mut(&mut self, idx: u32) -> &mut [u8] {
         self.greenzone.invalidate(idx);
+        self.ensure_length(idx + 1);
         let size = self.input_port.frame_size();
         &mut self.data[idx as usize * size..][..size]
+    }
+
+    /// Ensures the movie is at least 'len' frames long, inserting blank frames if needed.
+    pub fn ensure_length(&mut self, len: u32) {
+        if len > self.len() {
+            let frames_to_insert = len - self.len();
+            self.data.extend(
+                std::iter::repeat(&self.default_frame)
+                    .take(frames_to_insert as usize)
+                    .flatten(),
+            )
+        }
     }
 
     pub fn default_frame(&self) -> &[u8] {

@@ -32,7 +32,10 @@ pub struct Tas {
     movie: Movie,
 }
 
-pub struct Frame {}
+#[derive(Clone, Debug)]
+pub struct Pattern {
+    pub data: Vec<u8>,
+}
 
 #[derive(Clone, Debug)]
 pub enum RunMode {
@@ -43,11 +46,17 @@ pub enum RunMode {
     Paused,
 }
 
+impl Default for RunMode {
+    fn default() -> Self {
+        Self::Paused
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum RecordMode {
     ReadOnly,
-    Insert(Vec<u8>),
-    Overwrite(Vec<u8>),
+    Insert(Pattern),
+    Overwrite(Pattern),
 }
 
 impl Tas {
@@ -67,10 +76,7 @@ impl Tas {
         Ok(Tas {
             playback_cursor: 0,
             next_emulator_frame: 0,
-            run_mode: RunMode::Running {
-                stop_at: None,
-                record_mode: RecordMode::Insert(movie.default_frame().to_vec()),
-            },
+            run_mode: RunMode::Paused,
             last_host_frame: Instant::now(),
             core_frame_fraction: 0.,
 
@@ -154,15 +160,15 @@ impl Tas {
 
                     match record_mode {
                         RecordMode::ReadOnly => {}
-                        RecordMode::Insert(data) => {
-                            assert!(data.len() == self.movie.frame_size());
-                            self.insert(self.playback_cursor + 1, data);
+                        RecordMode::Insert(pattern) => {
+                            assert!(pattern.data.len() == self.movie.frame_size());
+                            self.insert(self.playback_cursor + 1, &pattern.data);
                         }
-                        RecordMode::Overwrite(data) => {
-                            assert!(data.len() == self.movie.frame_size());
+                        RecordMode::Overwrite(pattern) => {
+                            assert!(pattern.data.len() == self.movie.frame_size());
                             self.movie
                                 .frame_mut(self.playback_cursor + 1)
-                                .copy_from_slice(data);
+                                .copy_from_slice(&pattern.data);
                         }
                     }
                     assert!(self.next_emulator_frame == self.playback_cursor + 1);
@@ -184,8 +190,27 @@ impl Tas {
         &self.run_mode
     }
 
+    pub fn run_mode_mut(&mut self) -> &mut RunMode {
+        &mut self.run_mode
+    }
+
     pub fn set_run_mode(&mut self, mode: RunMode) {
         self.run_mode = mode;
+    }
+
+    pub fn set_input(&mut self, pattern: &Pattern) {
+        let mut mode = std::mem::take(self.run_mode_mut());
+        match &mut mode {
+            RunMode::Paused => self
+                .frame_mut(self.selected_frame())
+                .copy_from_slice(&pattern.data),
+            RunMode::Running {
+                stop_at: _,
+                record_mode: RecordMode::Insert(p) | RecordMode::Overwrite(p),
+            } => p.data.copy_from_slice(&pattern.data),
+            _ => {}
+        };
+        self.set_run_mode(mode);
     }
 
     pub fn av_info(&self) -> libretro_ffi::retro_system_av_info {
@@ -219,6 +244,7 @@ impl Tas {
         self.invalidate(idx);
 
         let insert_idx = idx as usize * size;
+        self.movie.ensure_length(idx);
         self.movie
             .data
             .splice(insert_idx..insert_idx, buf.iter().cloned());
@@ -231,21 +257,8 @@ impl Tas {
         self.core.restore_state(state);
     }
 
-    pub fn toggle_playback(&mut self) {
-        self.run_mode = match self.run_mode {
-            RunMode::Paused => RunMode::Running {
-                stop_at: None,
-                record_mode: RecordMode::ReadOnly,
-            },
-            RunMode::Running {
-                stop_at: _,
-                record_mode: _,
-            } => RunMode::Paused,
-        }
-    }
-
     pub fn select_next(&mut self, n: u32) {
-        let n = n.min(self.movie.len().saturating_sub(self.selected_frame() + 1) as u32);
+        let n = n.min(self.movie.len().saturating_sub(self.selected_frame() + 1));
         self.selected_frame += n;
         if self.selection_locked {
             self.seek_to(self.playback_cursor + n);

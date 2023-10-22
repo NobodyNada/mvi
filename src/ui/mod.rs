@@ -36,12 +36,19 @@ pub fn run() -> Result<()> {
                     winit::event::WindowEvent::KeyboardInput {
                         input:
                             winit::event::KeyboardInput {
-                                state: winit::event::ElementState::Pressed,
+                                state,
                                 virtual_keycode: Some(key),
                                 ..
                             },
                         ..
-                    } => keybinds.input_key(key, &modifiers, tas, piano_roll),
+                    } => match state {
+                        winit::event::ElementState::Pressed => {
+                            keybinds.key_down(*key, modifiers, tas, piano_roll)
+                        }
+                        winit::event::ElementState::Released => {
+                            keybinds.key_up(*key, modifiers, tas, piano_roll)
+                        }
+                    },
                     _ => {}
                 },
                 _ => {}

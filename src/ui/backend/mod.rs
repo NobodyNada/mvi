@@ -139,7 +139,7 @@ pub fn run(
                     data: include_bytes!("./arrows.ttf"),
                     size_pixels: 13.,
                     config: Some(FontConfig {
-                        glyph_ranges: FontGlyphRanges::from_slice(dbg!(&ARROW_GLYPHS)),
+                        glyph_ranges: FontGlyphRanges::from_slice(&ARROW_GLYPHS),
                         ..font_config
                     }),
                 },

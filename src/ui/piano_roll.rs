@@ -68,8 +68,7 @@ impl PianoRoll {
                 let buttons = match input_port {
                     InputPort::Joypad(j) => j.buttons(),
                 };
-                let number_column_width = rows.saturating_sub(1).ilog10() + 1;
-                let number_column_width = number_column_width.max(3) as usize;
+                let number_column_width = rows.max(1000).saturating_sub(1).ilog10() as usize + 1;
 
                 self.screen_size =
                     (ui.window_size()[1] / ui.text_line_height_with_spacing()) as u32;
