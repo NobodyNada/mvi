@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use imgui::{ListClipper, Ui};
 
 use crate::tas::{input::InputPort, Tas};
@@ -8,15 +6,34 @@ pub struct PianoRoll {
     last_selection: u32,
     screen_size: u32,
 
-    pending_scroll_events: VecDeque<ScrollEvent>,
+    scroll_lock: ScrollLock,
+    pending_scroll_lock: Option<ScrollLock>,
+
+    drag_mode: Option<DragMode>,
 }
 
-pub enum ScrollEvent {
-    Up(u32),
-    Down(u32),
+#[derive(Clone, Copy)]
+pub enum ScrollLock {
     Top,
     Center,
     Bottom,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum DragMode {
+    Playback,
+    Selection,
+    Input { index: u32, last: u32 },
+}
+
+impl ScrollLock {
+    fn ratio(&self) -> f32 {
+        match self {
+            ScrollLock::Top => 0.1,
+            ScrollLock::Center => 0.5,
+            ScrollLock::Bottom => 0.9,
+        }
+    }
 }
 
 macro_rules! color {
@@ -36,7 +53,9 @@ impl PianoRoll {
         PianoRoll {
             last_selection: 0,
             screen_size: 30,
-            pending_scroll_events: VecDeque::default(),
+            scroll_lock: ScrollLock::Center,
+            pending_scroll_lock: None,
+            drag_mode: None,
         }
     }
 
@@ -44,21 +63,30 @@ impl PianoRoll {
         self.screen_size
     }
 
-    pub fn push_scroll_event(&mut self, event: ScrollEvent) {
-        self.pending_scroll_events.push_back(event);
+    pub fn set_scroll_lock(&mut self, event: ScrollLock) {
+        self.pending_scroll_lock = Some(event);
     }
 
     pub fn draw(&mut self, ui: &mut Ui, tas: &mut Tas) {
+        if !ui.is_mouse_down(imgui::MouseButton::Left) {
+            self.drag_mode = None;
+        }
+
         ui.window("Piano Roll")
             .size([256., 768.], imgui::Condition::FirstUseEver)
             .build(|| {
                 let rows = tas.movie().len();
 
                 let _style = ui.push_style_var(imgui::StyleVar::ItemSpacing([0., 0.]));
-                if tas.selected_frame() != self.last_selection {
-                    ui.set_scroll_y(
-                        (tas.selected_frame() as f64 * ui.text_line_height_with_spacing() as f64)
-                            as f32,
+                if tas.selected_frame() != self.last_selection || self.pending_scroll_lock.is_some()
+                {
+                    self.scroll_lock = self.pending_scroll_lock.take().unwrap_or(self.scroll_lock);
+                    ui.set_scroll_from_pos_y_with_ratio(
+                        ui.cursor_start_pos()[1]
+                            + (tas.selected_frame() as f64
+                                * ui.text_line_height_with_spacing() as f64)
+                                as f32,
+                        self.scroll_lock.ratio(),
                     );
                 }
 
@@ -74,11 +102,19 @@ impl PianoRoll {
                     (ui.window_size()[1] / ui.text_line_height_with_spacing()) as u32;
 
                 for row in clipper.iter() {
-                    let (highlight, frameno_color) = if row as u32 == tas.selected_frame() {
+                    let row = row as u32;
+
+                    let frame_rect = [
+                        [ui.window_pos()[0], ui.cursor_screen_pos()[1]],
+                        [
+                            ui.window_pos()[0] + ui.window_size()[0],
+                            ui.cursor_screen_pos()[1] + ui.text_line_height_with_spacing(),
+                        ],
+                    ];
+
+                    let (highlight, frameno_color) = if row == tas.selected_frame() {
                         (Some(Self::SELECT_HIGHLIGHT), Self::SELECTED_FRAMENO_COLOR)
-                    } else if tas.movie().greenzone().restore((row + 1) as u32).0
-                        == (row + 1) as u32
-                    {
+                    } else if tas.movie().greenzone().restore(row + 1).0 == (row + 1) {
                         (Some(Self::GREENZONE_HIGHLIGHT), Self::FRAMENO_COLOR)
                     } else {
                         (None, Self::FRAMENO_COLOR)
@@ -98,18 +134,42 @@ impl PianoRoll {
                             .build();
                     }
 
-                    let marker = if row as u32 == tas.playback_frame() {
+                    let marker = if row == tas.playback_frame() {
                         '>'
                     } else {
                         ' '
                     };
+
+                    ui.text_colored(frameno_color, format!("{marker}"));
+                    if ui.is_item_clicked()
+                        || self.drag_mode == Some(DragMode::Playback)
+                            && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
+                    {
+                        self.drag_mode = Some(DragMode::Playback);
+                        tas.seek_to(row);
+                    }
+
+                    ui.same_line();
                     ui.text_colored(
                         frameno_color,
-                        format!("{marker}{row:width$} ", width = number_column_width),
+                        format!("{row:width$} ", width = number_column_width),
                     );
+                    if ui.is_item_clicked()
+                        || self.drag_mode == Some(DragMode::Selection)
+                            && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
+                    {
+                        self.drag_mode = Some(DragMode::Selection);
+                        match row.cmp(&tas.selected_frame()) {
+                            std::cmp::Ordering::Less => tas.select_prev(tas.selected_frame() - row),
+                            std::cmp::Ordering::Greater => {
+                                tas.select_next(row - tas.selected_frame())
+                            }
+                            std::cmp::Ordering::Equal => {}
+                        }
+                    }
 
                     for (index, text) in buttons.iter().enumerate() {
-                        let frame = tas.frame(row as u32);
+                        let frame = tas.frame(row);
                         let pressed = input_port.read(frame, 0, index as u32);
                         let color = if pressed != 0 {
                             Self::PRESSED_COLOR
@@ -121,8 +181,31 @@ impl PianoRoll {
                         ui.text_colored(color, text);
 
                         if ui.is_item_clicked() {
-                            let frame = tas.frame_mut(row as u32);
+                            self.drag_mode = Some(DragMode::Input {
+                                index: index as u32,
+                                last: row,
+                            });
+                            let frame = tas.frame_mut(row);
                             input_port.write(frame, 0, index as u32, (pressed == 0) as i16);
+                        } else if let Some(DragMode::Input { index, last }) = &mut self.drag_mode {
+                            if ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
+                                && row != *last
+                            {
+                                // toggle all inputs between last and row,
+                                // inclusive of row but exclusive of last
+                                let min = std::cmp::min(row, *last + 1);
+                                let max = std::cmp::max(row + 1, *last);
+                                for i in min..max {
+                                    let frame = tas.frame_mut(i);
+                                    input_port.write(
+                                        frame,
+                                        0,
+                                        *index,
+                                        (input_port.read(frame, 0, *index) == 0) as i16,
+                                    );
+                                }
+                                *last = row;
+                            }
                         }
                     }
                 }

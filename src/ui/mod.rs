@@ -56,7 +56,7 @@ pub fn run() -> Result<()> {
         },
         |ui, renderer| {
             let mut tas = tas.lock().unwrap();
-            let mut piano_roll = &mut piano_roll.lock().unwrap();
+            let piano_roll = &mut piano_roll.lock().unwrap();
 
             let av = tas.av_info();
             // Create the framebuffer, if it does not already exist

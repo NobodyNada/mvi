@@ -4,7 +4,7 @@ use winit::event::{ModifiersState, VirtualKeyCode};
 
 use crate::{
     tas::{self, Pattern, Tas},
-    ui::piano_roll::ScrollEvent,
+    ui::piano_roll::ScrollLock,
 };
 
 use super::piano_roll::PianoRoll;
@@ -19,6 +19,7 @@ pub enum Mode {
     Normal { count: u32 },
     Insert(Pattern),
     Replace(Pattern),
+    Z,
 }
 
 // shortcut for defining control characters
@@ -71,10 +72,13 @@ impl Keybinds {
                 self.mode = Mode::Normal { count: 0 };
                 tas.set_run_mode(tas::RunMode::Paused);
             }
-            (Mode::Normal { .. }, NONE, VirtualKeyCode::I) => {
+            (Mode::Normal { .. }, NONE, VirtualKeyCode::I | VirtualKeyCode::A)
+            | (Mode::Normal { .. }, SHIFT, VirtualKeyCode::R) => {
                 let pattern = Pattern {
                     data: tas.movie().default_frame().to_vec(),
                 };
+                let is_replace = key == VirtualKeyCode::R;
+                let is_append = key == VirtualKeyCode::A;
                 let mode = match tas.run_mode() {
                     tas::RunMode::Paused => tas::RunMode::Paused,
                     tas::RunMode::Running {
@@ -82,33 +86,46 @@ impl Keybinds {
                         record_mode: _,
                     } => tas::RunMode::Running {
                         stop_at: *stop_at,
-                        record_mode: tas::RecordMode::Insert(pattern.clone()),
+                        record_mode: if is_replace {
+                            tas::RecordMode::Overwrite(pattern.clone())
+                        } else {
+                            tas::RecordMode::Insert(pattern.clone())
+                        },
                     },
                 };
                 tas.set_run_mode(mode);
-                self.mode = Mode::Insert(pattern);
+                tas.ensure_length(tas.selected_frame() + 1);
+                if is_replace {
+                    self.mode = Mode::Replace(pattern);
+                } else {
+                    // If the movie only has one blank frame, overwrite it insead of inserting
+                    if tas.movie().len() > 1 || tas.frame(0) != tas.movie().default_frame() {
+                        if is_append {
+                            tas.insert(tas.selected_frame() + 1, &pattern.data);
+                        } else {
+                            tas.insert(tas.selected_frame(), &pattern.data);
+                        }
+                    }
+                    self.mode = Mode::Insert(pattern);
+                }
             }
-            (Mode::Normal { .. }, SHIFT, VirtualKeyCode::R) => {
-                let pattern = Pattern {
-                    data: tas.movie().default_frame().to_vec(),
-                };
-                let mode = match tas.run_mode() {
-                    tas::RunMode::Paused => tas::RunMode::Paused,
-                    tas::RunMode::Running {
-                        stop_at,
-                        record_mode: _,
-                    } => tas::RunMode::Running {
-                        stop_at: *stop_at,
-                        record_mode: tas::RecordMode::Overwrite(pattern.clone()),
-                    },
-                };
-                tas.set_run_mode(mode);
-                self.mode = Mode::Replace(pattern);
+            (Mode::Insert(pattern) | Mode::Replace(pattern), NONE, VirtualKeyCode::Return) => {
+                if let tas::RunMode::Paused = tas.run_mode() {
+                    #[allow(clippy::unnecessary_to_owned)] // false-positive
+                    tas.insert(
+                        tas.selected_frame() + 1,
+                        &tas.movie().default_frame().to_vec(),
+                    );
+                    tas.select_next(1);
+                    tas.set_input(pattern);
+                }
             }
             (Mode::Insert(pattern) | Mode::Replace(pattern), NONE, k) => {
                 if let Some(id) = self.input_bindings.get(&k) {
-                    tas.movie().input_port().write(&mut pattern.data, 0, *id, 1);
-                    tas.set_input(pattern);
+                    if tas.movie().input_port().read(&pattern.data, 0, *id) != 1 {
+                        tas.movie().input_port().write(&mut pattern.data, 0, *id, 1);
+                        tas.set_input(pattern);
+                    }
                 }
             }
             _ => {}
@@ -127,8 +144,10 @@ impl Keybinds {
         match (&mut self.mode, modifiers, key) {
             (Mode::Insert(pattern) | Mode::Replace(pattern), NONE, k) => {
                 if let Some(id) = self.input_bindings.get(&k) {
-                    tas.movie().input_port().write(&mut pattern.data, 0, *id, 0);
-                    tas.set_input(pattern);
+                    if tas.movie().input_port().read(&pattern.data, 0, *id) != 0 {
+                        tas.movie().input_port().write(&mut pattern.data, 0, *id, 0);
+                        tas.set_input(pattern);
+                    }
                 }
             }
             _ => {}
@@ -144,7 +163,7 @@ impl Keybinds {
             tas::RunMode::Paused => tas::RunMode::Running {
                 stop_at: None,
                 record_mode: match &self.mode {
-                    Mode::Normal { .. } => tas::RecordMode::ReadOnly,
+                    Mode::Normal { .. } | Mode::Z => tas::RecordMode::ReadOnly,
                     Mode::Insert(pattern) => tas::RecordMode::Insert(pattern.clone()),
                     Mode::Replace(pattern) => tas::RecordMode::Overwrite(pattern.clone()),
                 },
@@ -159,6 +178,12 @@ impl Keybinds {
         const CF: char = control('B');
         const CB: char = control('F');
         match (&mut self.mode, c) {
+            (Mode::Normal { .. }, 'z') => self.mode = Mode::Z,
+            (Mode::Z, 't') => piano_roll.set_scroll_lock(ScrollLock::Top),
+            (Mode::Z, 'z') => piano_roll.set_scroll_lock(ScrollLock::Center),
+            (Mode::Z, 'b') => piano_roll.set_scroll_lock(ScrollLock::Bottom),
+            (Mode::Z, _) => self.mode = Mode::Normal { count: 0 },
+
             (Mode::Normal { count }, d @ '0'..='9') => {
                 *count *= 10;
                 *count += d.to_digit(10).unwrap();

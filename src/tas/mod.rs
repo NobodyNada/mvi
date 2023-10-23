@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::core::{self, Core};
 
-use self::{greenzone::Greenzone, movie::Movie};
+use self::movie::Movie;
 
 mod greenzone;
 pub mod input;
@@ -236,6 +236,10 @@ impl Tas {
     pub fn frame_mut(&mut self, idx: u32) -> &mut [u8] {
         self.invalidate(idx);
         self.movie.frame_mut(idx)
+    }
+
+    pub fn ensure_length(&mut self, len: u32) {
+        self.movie.ensure_length(len);
     }
 
     pub fn insert(&mut self, idx: u32, buf: &[u8]) {

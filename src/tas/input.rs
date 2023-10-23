@@ -19,20 +19,16 @@ impl InputPort {
     }
 
     pub fn read(&self, data: &[u8], index: u32, id: u32) -> i16 {
+        assert!(index < self.num_controllers());
         match self {
-            Self::Joypad(j) => {
-                assert_eq!(index, 0);
-                j.read(data, id) as i16
-            }
+            Self::Joypad(j) => j.read(data, id) as i16,
         }
     }
 
     pub fn write(&self, data: &mut [u8], index: u32, id: u32, value: i16) {
+        assert!(index < self.num_controllers());
         match self {
-            Self::Joypad(j) => {
-                assert_eq!(index, 0);
-                j.write(data, id, value != 0)
-            }
+            Self::Joypad(j) => j.write(data, id, value != 0),
         }
     }
 

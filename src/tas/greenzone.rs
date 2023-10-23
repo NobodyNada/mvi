@@ -29,8 +29,4 @@ impl Greenzone {
             .expect("should always have a power-on state");
         (frame, state)
     }
-
-    pub fn states(&self) -> &BTreeMap<u32, Savestate> {
-        &self.states
-    }
 }
