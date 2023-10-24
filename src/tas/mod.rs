@@ -72,7 +72,7 @@ impl Tas {
 
         let frame_0 = core.save_state();
 
-        let movie = Movie::new(input_port, frame_0);
+        let movie = Movie::new(input_port, frame_0.compress());
         Ok(Tas {
             playback_cursor: 0,
             next_emulator_frame: 0,
@@ -110,7 +110,7 @@ impl Tas {
         self.next_emulator_frame += 1;
         self.movie
             .greenzone
-            .save(self.next_emulator_frame, self.core.save_state());
+            .save(self.next_emulator_frame, self.core.save_state().compress());
         if self.playback_cursor < self.next_emulator_frame - 1 {
             let n = self.next_emulator_frame - self.playback_cursor - 1;
             self.playback_cursor += n;
@@ -142,7 +142,7 @@ impl Tas {
             return &self.core.frame;
         }
 
-        let run_mode = std::mem::replace(&mut self.run_mode, RunMode::Paused);
+        let mut run_mode = std::mem::replace(&mut self.run_mode, RunMode::Paused);
 
         let result = match &run_mode {
             RunMode::Paused => &self.core.frame,
@@ -153,7 +153,7 @@ impl Tas {
                 while self.core_frame_fraction >= 1. {
                     if let Some(stop) = stop_at {
                         if self.playback_cursor >= *stop {
-                            self.run_mode = RunMode::Paused;
+                            run_mode = RunMode::Paused;
                             break;
                         }
                     }
@@ -182,6 +182,7 @@ impl Tas {
         };
 
         self.run_mode = run_mode;
+        self.movie.greenzone.gc(self.playback_cursor);
 
         result
     }

@@ -13,6 +13,9 @@ use anyhow::{ensure, Result};
 use libloading::Library;
 use libretro_ffi::*;
 
+mod savestate;
+pub use savestate::*;
+
 mod symbols;
 use symbols::CoreSymbols;
 
@@ -23,7 +26,7 @@ pub struct Core {
     pub av_info: retro_system_av_info,
     pub frame: Frame,
     id: usize,
-    savestate_size: usize,
+    savestate_buffer: Box<[u8]>,
 }
 unsafe impl Send for Core {}
 
@@ -43,11 +46,6 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub buffer: Vec<[u8; 4]>,
-}
-
-pub struct Savestate {
-    state: Box<[u8]>,
-    core_id: usize,
 }
 
 impl Frame {
@@ -104,12 +102,15 @@ impl Core {
             (symbols().retro_get_system_av_info)(av_info.as_mut_ptr());
             let av_info = av_info.assume_init();
 
+            let savestate_buffer: Box<[u8]> = std::iter::repeat(0)
+                .take((symbols().retro_serialize_size)())
+                .collect();
             let core = Core {
                 system_info,
                 av_info: dbg!(av_info),
                 frame: Frame::blank(&av_info),
                 id: ID.fetch_add(1, Ordering::Relaxed),
-                savestate_size: (symbols().retro_serialize_size)(),
+                savestate_buffer,
             };
             Ok(core)
         }
@@ -129,32 +130,51 @@ impl Core {
         std::mem::swap(&mut self.frame, &mut lock().frame);
     }
 
-    pub fn save_state(&mut self) -> Savestate {
+    /// Saves the current state of the emulated system.
+    pub fn save_state(&mut self) -> SavestateBuffer<'_> {
         unsafe {
-            let state =
-                std::alloc::alloc(std::alloc::Layout::array::<u8>(self.savestate_size).unwrap());
             assert!((symbols().retro_serialize)(
-                state.cast(),
-                self.savestate_size
+                self.savestate_buffer.as_mut_ptr().cast(),
+                self.savestate_buffer.len()
             ));
-            Savestate {
-                state: Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                    state,
-                    self.savestate_size,
-                )),
-                core_id: self.id,
-            }
         }
+        SavestateBuffer::new(&self.savestate_buffer, self.id)
     }
 
-    pub fn restore_state(&mut self, state: &Savestate) {
-        assert_eq!(state.core_id, self.id);
+    /// Restores a savestate.
+    /// Returns a reference to the temporary buffer containing the decompressed state.
+    pub fn restore_state(&mut self, state: SavestateRef<'_>) -> SavestateBuffer<'_> {
+        assert_eq!(state.core_id(), self.id);
+        state.decompress(&mut self.savestate_buffer);
+
         unsafe {
             assert!((symbols().retro_unserialize)(
-                state.state.as_ptr().cast(),
-                state.state.len()
+                self.savestate_buffer.as_ptr().cast(),
+                self.savestate_buffer.len()
             ));
         }
+
+        SavestateBuffer::new(&self.savestate_buffer, self.id)
+    }
+
+    /// Restores a delta savestate, given its parent savestate.
+    /// Returns a reference to the temporary buffer containing the decompressed state.
+    pub fn restore_delta(
+        &mut self,
+        state: &DeltaSavestate,
+        parent: &Savestate,
+    ) -> SavestateBuffer<'_> {
+        assert_eq!(state.core_id, self.id);
+        state.decompress(parent, &mut self.savestate_buffer);
+
+        unsafe {
+            assert!((symbols().retro_unserialize)(
+                self.savestate_buffer.as_ptr().cast(),
+                self.savestate_buffer.len()
+            ));
+        }
+
+        SavestateBuffer::new(&self.savestate_buffer, self.id)
     }
 }
 impl Drop for Core {

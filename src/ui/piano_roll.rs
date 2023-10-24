@@ -114,7 +114,7 @@ impl PianoRoll {
 
                     let (highlight, frameno_color) = if row == tas.selected_frame() {
                         (Some(Self::SELECT_HIGHLIGHT), Self::SELECTED_FRAMENO_COLOR)
-                    } else if tas.movie().greenzone().restore(row + 1).0 == (row + 1) {
+                    } else if tas.movie().greenzone().contains(row) {
                         (Some(Self::GREENZONE_HIGHLIGHT), Self::FRAMENO_COLOR)
                     } else {
                         (None, Self::FRAMENO_COLOR)
