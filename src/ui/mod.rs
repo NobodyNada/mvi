@@ -62,32 +62,34 @@ pub fn run() -> Result<()> {
             // Create the framebuffer, if it does not already exist
             let framebuffer = framebuffer.get_or_insert_with(|| {
                 let buffer: vk::buffer::Subbuffer<[[u8; 4]]> = vk::buffer::Buffer::new_slice(
-                    renderer.context().memory_allocator(),
+                    renderer.context().memory_allocator().clone(),
                     vk::buffer::sys::BufferCreateInfo {
                         usage: vk::buffer::BufferUsage::TRANSFER_SRC,
                         ..Default::default()
                     },
                     vk::memory::allocator::AllocationCreateInfo {
-                        usage: vk::memory::allocator::MemoryUsage::Upload,
-                        allocate_preference:
-                            vk::memory::allocator::MemoryAllocatePreference::AlwaysAllocate,
+                        memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE
+                            | vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                         ..Default::default()
                     },
                     (av.geometry.max_width * tas.av_info().geometry.max_height) as u64,
                 )
                 .unwrap();
 
-                let image = vk::image::StorageImage::with_usage(
-                    renderer.context().memory_allocator(),
-                    vk::image::ImageDimensions::Dim2d {
-                        width: av.geometry.max_width,
-                        height: av.geometry.max_height,
-                        array_layers: 1,
+                let image = vk::image::Image::new(
+                    renderer.context().memory_allocator().clone(),
+                    vk::image::ImageCreateInfo {
+                        format: vk::format::Format::R8G8B8A8_UNORM,
+                        view_formats: vec![vk::format::Format::R8G8B8A8_UNORM],
+                        extent: [av.geometry.max_width, av.geometry.max_height, 1],
+                        usage: vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
+                        ..Default::default()
                     },
-                    vk::format::Format::R8G8B8A8_UNORM,
-                    vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
-                    Default::default(),
-                    std::iter::once(renderer.context().graphics_queue().queue_family_index()),
+                    vk::memory::allocator::AllocationCreateInfo {
+                        memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE
+                            | vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                        ..Default::default()
+                    },
                 )
                 .unwrap();
 
@@ -167,6 +169,6 @@ pub fn run() -> Result<()> {
 
 struct Framebuffer {
     buffer: vk::buffer::Subbuffer<[[u8; 4]]>,
-    image: Arc<vk::image::StorageImage>,
+    image: Arc<vk::image::Image>,
     texture: Arc<backend::render::Texture>,
 }

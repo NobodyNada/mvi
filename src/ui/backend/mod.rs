@@ -44,7 +44,7 @@ pub fn run(
             },
             // Allow us to use devices that do not fully support
             // the Vulkan specification, such as Apple graphics hardware.
-            enumerate_portability: true,
+            flags: vk::instance::InstanceCreateFlags::ENUMERATE_PORTABILITY,
             ..Default::default()
         },
         device_features: vk::device::Features {
@@ -54,9 +54,9 @@ pub fn run(
 
         // Use our callback to print debug messages.
         debug_create_info: Some(
-            vk::instance::debug::DebugUtilsMessengerCreateInfo::user_callback(std::sync::Arc::new(
-                debug,
-            )),
+            vk::instance::debug::DebugUtilsMessengerCreateInfo::user_callback(unsafe {
+                vk::instance::debug::DebugUtilsMessengerCallback::new(debug)
+            }),
         ),
 
         // Print the name of the automatically-selected device.
@@ -73,8 +73,7 @@ pub fn run(
         .with_title(WINDOW_TITLE)
         .build(&event_loop)?;
     let window = Arc::new(window);
-    let surface =
-        vulkano_win::create_surface_from_handle(window.clone(), vk_instance.clone()).unwrap();
+    let surface = Surface::from_window(vk_instance.clone(), window.clone()).unwrap();
 
     // Launch a thread to do our work -- handling events, updating the UI, running the emulation
     // core, and rendering the screen. This way, we can tie the core loop to display refresh
@@ -111,7 +110,7 @@ pub fn run(
                 );
 
                 let mut platform = WinitPlatform::init(&mut imgui);
-                platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+                platform.attach_window(imgui.io_mut(), &*window, HiDpiMode::Default);
                 imgui.platform_io_mut().monitors.replace_from_slice(
                     &window
                         .available_monitors()
@@ -373,11 +372,8 @@ pub fn run(
                     UserEvent::Exit => control_flow.set_exit_with_code(0),
                     UserEvent::CreateWindow { request, response } => {
                         let window = Arc::new(request.build(window_target).unwrap());
-                        let surface = vulkano_win::create_surface_from_handle(
-                            window.clone(),
-                            vk_instance.clone(),
-                        )
-                        .unwrap();
+                        let surface =
+                            Surface::from_window(vk_instance.clone(), window.clone()).unwrap();
                         *response.1.lock().unwrap() =
                             Some(CreateWindowResponse { window, surface });
                         response.0.notify_one();
@@ -394,31 +390,41 @@ pub fn run(
 }
 
 /// This callback will be invoked whenever the Vulkan API generates a debug message.
-fn debug(msg: &vulkano::instance::debug::Message<'_>) {
+fn debug(
+    severity: vk::instance::debug::DebugUtilsMessageSeverity,
+    ty: vk::instance::debug::DebugUtilsMessageType,
+    data: vk::instance::debug::DebugUtilsMessengerCallbackData<'_>,
+) {
     use vk::instance::debug::DebugUtilsMessageSeverity as Severity;
     use vk::instance::debug::DebugUtilsMessageType as Type;
 
-    let severity = if msg.severity.contains(Severity::ERROR) {
+    let severity = if severity.contains(Severity::ERROR) {
         "ERROR"
-    } else if msg.severity.contains(Severity::WARNING) {
+    } else if severity.contains(Severity::WARNING) {
         "WARNING"
-    } else if msg.severity.contains(Severity::INFO) {
+    } else if severity.contains(Severity::INFO) {
         "INFO"
-    } else if msg.severity.contains(Severity::VERBOSE) {
+    } else if severity.contains(Severity::VERBOSE) {
         "VERBOSE"
     } else {
         "DEBUG"
     };
 
-    let ty = if msg.ty.contains(Type::VALIDATION) {
+    let ty = if ty.contains(Type::VALIDATION) {
         " [VALIDATION]"
-    } else if msg.ty.contains(Type::PERFORMANCE) {
+    } else if ty.contains(Type::PERFORMANCE) {
         " [PERF]"
     } else {
         ""
     };
 
-    eprintln!("[{severity}]{ty} {}", msg.description);
+    eprintln!(
+        "[{severity}]{ty}{} {}",
+        data.message_id_name
+            .map(|s| format!(" [{s}]"))
+            .unwrap_or_default(),
+        data.message
+    );
 }
 
 struct ViewportBackend {

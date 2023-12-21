@@ -3,11 +3,15 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use imgui::{internal::RawWrapper, DrawData, DrawIdx, FontAtlasFlags, TextureId};
+use smallvec::smallvec;
 use vk::{
     command_buffer::PrimaryCommandBufferAbstract,
-    pipeline::{graphics::vertex_input::Vertex, Pipeline},
+    pipeline::{
+        graphics::vertex_input::{Vertex, VertexDefinition},
+        Pipeline,
+    },
     sync::GpuFuture,
 };
 use vulkano as vk;
@@ -176,7 +180,10 @@ impl Renderer {
                 clear_values: vec![Some(vk::format::ClearValue::Float([0., 0., 0., 0.]))],
                 ..vk::command_buffer::RenderPassBeginInfo::framebuffer(framebuffer.framebuffer)
             },
-            vk::command_buffer::SubpassContents::Inline,
+            vk::command_buffer::SubpassBeginInfo {
+                contents: vk::command_buffer::SubpassContents::Inline,
+                ..Default::default()
+            },
         )?;
 
         // Configure our viewport dimensions.
@@ -184,15 +191,15 @@ impl Renderer {
         let dimensions = [dimensions[0] as f32, dimensions[1] as f32];
         command_buffer.set_viewport(
             0,
-            [vk::pipeline::graphics::viewport::Viewport {
-                origin: [0.0, 0.0],
-                dimensions,
-                depth_range: 0.0..1.0,
+            smallvec![vk::pipeline::graphics::viewport::Viewport {
+                offset: [0.0, 0.0],
+                extent: dimensions,
+                depth_range: 0.0..=1.0,
             }],
-        );
+        )?;
 
         // Use our graphics pipeline.
-        command_buffer.bind_pipeline_graphics(self.pipeline.clone());
+        command_buffer.bind_pipeline_graphics(self.pipeline.clone())?;
 
         // Upload offset/scale push constants.
         // Map (x, y) to (-1, -1) and (x+w, y+h) to (1,  1)
@@ -205,7 +212,7 @@ impl Renderer {
         let scale = [2. / w, 2. / h];
         let translate = [-1. - x * scale[0], -1. - y * scale[1]];
         let transform = shaders::Transform { scale, translate };
-        command_buffer.push_constants(self.pipeline.layout().clone(), 0, transform);
+        command_buffer.push_constants(self.pipeline.layout().clone(), 0, transform)?;
 
         // Draw our geometry.
         for list in draw_data.draw_lists() {
@@ -223,8 +230,8 @@ impl Renderer {
             index_buffer.write()?.copy_from_slice(index_data);
 
             // Bind the buffers to the pipeline.
-            command_buffer.bind_vertex_buffers(0, vertex_buffer);
-            command_buffer.bind_index_buffer(index_buffer);
+            command_buffer.bind_vertex_buffers(0, vertex_buffer)?;
+            command_buffer.bind_index_buffer(index_buffer)?;
 
             // Execute the draw commands.
             for cmd in list.commands() {
@@ -251,7 +258,7 @@ impl Renderer {
                             self.pipeline.layout().clone(),
                             0,
                             texture.descriptor.clone(),
-                        );
+                        )?;
 
                         // Configure the scissor.
                         let clip_min = [
@@ -279,11 +286,11 @@ impl Renderer {
 
                         command_buffer.set_scissor(
                             0,
-                            [vk::pipeline::graphics::viewport::Scissor {
-                                origin: clip_min,
-                                dimensions: clip_max,
+                            smallvec![vk::pipeline::graphics::viewport::Scissor {
+                                offset: clip_min,
+                                extent: clip_max,
                             }],
-                        );
+                        )?;
 
                         // Draw the thing.
                         command_buffer.draw_indexed(
@@ -303,7 +310,7 @@ impl Renderer {
         }
 
         // we're done rendering!
-        command_buffer.end_render_pass()?;
+        command_buffer.end_render_pass(vk::command_buffer::SubpassEndInfo::default())?;
 
         self.frame_id += 1;
 
@@ -327,19 +334,11 @@ impl Renderer {
                     )
                 },
             );
-        match inflight.flush() {
-            Ok(()) => {
-                // Our frame is being processed!
-                // Clean up any old textures.
-                self.textures.retain(|_, t| t.strong_count() != 0);
-            }
-            Err(vk::sync::FlushError::OutOfDate) => {
-                // This frame could not be rendered because the swapchain is no longer valid.
-                // Make sure we recreate it next time.
-                target.invalidate();
-            }
-            Err(e) => bail!(e), // Something went wrong; return the error so we can print it.
-        }
+        inflight.flush()?;
+
+        // Clean up any old textures.
+        self.textures.retain(|_, t| t.strong_count() != 0);
+
         Ok(inflight)
     }
 
@@ -371,10 +370,10 @@ impl Renderer {
             attachments: {
                 // Clear the color buffer on load, and store it to memory so we can see it.
                 color: {
-                    load: Clear,
-                    store: Store,
                     format: color_format,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
                 },
             },
             pass: {
@@ -385,11 +384,12 @@ impl Renderer {
 
         // Create a buffer allocator.
         let buffer_allocator = vk::buffer::allocator::SubbufferAllocator::new(
-            vk::memory::allocator::StandardMemoryAllocator::new_default(context.device().clone()),
+            context.memory_allocator().clone(),
             vk::buffer::allocator::SubbufferAllocatorCreateInfo {
                 buffer_usage: vk::buffer::BufferUsage::VERTEX_BUFFER
                     | vk::buffer::BufferUsage::INDEX_BUFFER,
-                memory_usage: vk::memory::allocator::MemoryUsage::Upload,
+                memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE
+                    | vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
         );
@@ -398,6 +398,7 @@ impl Renderer {
         let descriptor_set_allocator =
             vk::descriptor_set::allocator::StandardDescriptorSetAllocator::new(
                 context.device().clone(),
+                vk::descriptor_set::allocator::StandardDescriptorSetAllocatorCreateInfo::default(),
             );
 
         // Create a command buffer so we can upload our font texture.
@@ -415,36 +416,60 @@ impl Renderer {
         // Create an image buffer in GPU memory, and upload it to the GPU.
         imgui.fonts().flags.insert(FontAtlasFlags::NO_BAKED_LINES);
         let font_image = imgui.fonts().build_alpha8_texture();
-        let font_image = vk::image::ImmutableImage::from_iter(
-            context.memory_allocator(),
-            font_image.data.iter().copied(),
-            vk::image::ImageDimensions::Dim2d {
-                width: font_image.width,
-                height: font_image.height,
-                array_layers: 1,
+        let font_staging_buffer = vk::buffer::Buffer::new_slice(
+            context.memory_allocator().clone(),
+            vk::buffer::BufferCreateInfo {
+                usage: vk::buffer::BufferUsage::TRANSFER_SRC,
+                ..Default::default()
             },
-            vk::image::MipmapsCount::One,
-            vk::format::Format::R8_UNORM,
-            &mut command_buffer,
+            vk::memory::allocator::AllocationCreateInfo {
+                memory_type_filter: vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            font_image.data.len() as u64,
+        )?;
+        font_staging_buffer
+            .write()
+            .unwrap()
+            .copy_from_slice(font_image.data);
+        let font_image = vk::image::Image::new(
+            context.memory_allocator().clone(),
+            vk::image::ImageCreateInfo {
+                format: vk::format::Format::R8_UNORM,
+                view_formats: vec![vk::format::Format::R8_UNORM],
+                extent: [font_image.width, font_image.height, 1],
+                usage: vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            vk::memory::allocator::AllocationCreateInfo {
+                memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+        command_buffer.copy_buffer_to_image(
+            vk::command_buffer::CopyBufferToImageInfo::buffer_image(
+                font_staging_buffer,
+                font_image.clone(),
+            ),
         )?;
 
         let create_info = vk::image::view::ImageViewCreateInfo {
-            component_mapping: vk::sampler::ComponentMapping {
-                r: vk::sampler::ComponentSwizzle::One,
-                g: vk::sampler::ComponentSwizzle::One,
-                b: vk::sampler::ComponentSwizzle::One,
-                a: vk::sampler::ComponentSwizzle::Red,
+            component_mapping: vk::image::sampler::ComponentMapping {
+                r: vk::image::sampler::ComponentSwizzle::One,
+                g: vk::image::sampler::ComponentSwizzle::One,
+                b: vk::image::sampler::ComponentSwizzle::One,
+                a: vk::image::sampler::ComponentSwizzle::Red,
             },
             ..vk::image::view::ImageViewCreateInfo::from_image(&font_image)
         };
         let font_image = vk::image::view::ImageView::new(font_image, create_info)?;
 
         // Create a sampler that describes how to access our image.
-        let sampler = vk::sampler::Sampler::new(
+        let sampler = vk::image::sampler::Sampler::new(
             context.device().clone(),
-            vk::sampler::SamplerCreateInfo {
-                mag_filter: vk::sampler::Filter::Nearest,
-                min_filter: vk::sampler::Filter::Nearest,
+            vk::image::sampler::SamplerCreateInfo {
+                mag_filter: vk::image::sampler::Filter::Nearest,
+                min_filter: vk::image::sampler::Filter::Nearest,
                 ..Default::default()
             },
         )?;
@@ -468,49 +493,73 @@ impl Renderer {
             },
         )?;
 
+        let vs = shaders::load_vertex(context.device().clone())?
+            .entry_point("main")
+            .context("entry point not found")?;
+        let fs = shaders::load_fragment(context.device().clone())?
+            .entry_point("main")
+            .context("entry point not found")?;
+        let stages = smallvec![
+            vulkano::pipeline::PipelineShaderStageCreateInfo::new(vs.clone()),
+            vulkano::pipeline::PipelineShaderStageCreateInfo::new(fs),
+        ];
+        let mut layout =
+            vk::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo::from_stages(stages.iter());
+        // Adjust the pipeline layout to fit our sampler.
+        layout.set_layouts[0]
+            .bindings
+            .get_mut(&0)
+            .unwrap()
+            .immutable_samplers = vec![sampler.clone()];
+        let layout = vk::pipeline::PipelineLayout::new(
+            context.device().clone(),
+            layout.into_pipeline_layout_create_info(context.device().clone())?,
+        )?;
+
         // Define our graphics pipeline:
-        let pipeline = vk::pipeline::GraphicsPipeline::start()
-            // Use the render pass we described above
-            .render_pass(
-                vk::pipeline::graphics::render_pass::PipelineRenderPassType::BeginRenderPass(
-                    render_pass.clone().first_subpass(),
+        let pipeline = vk::pipeline::GraphicsPipeline::new(
+            context.device().clone(),
+            None,
+            vk::pipeline::graphics::GraphicsPipelineCreateInfo {
+                stages,
+                // Pass the inputs through our vertex shader
+                vertex_input_state: Some(
+                    shaders::DrawVert::per_vertex().definition(&vs.info().input_interface)?,
                 ),
-            )
-            // The vertex inputs are defined as in our shader attributes.
-            .vertex_input_state(shaders::DrawVert::per_vertex())
-            // Pass the inputs through our vertex shader
-            .vertex_shader(
-                shaders::load_vertex(context.device().clone())?
-                    .entry_point("main")
-                    .context("entry point not found")?,
-                (),
-            )
-            // Pass the pixels through our fragment shader
-            .fragment_shader(
-                shaders::load_fragment(context.device().clone())?
-                    .entry_point("main")
-                    .context("entry point not found")?,
-                (),
-            )
-            // Do not use depth or stencil testing.
-            .depth_stencil_state(
-                vk::pipeline::graphics::depth_stencil::DepthStencilState::disabled(),
-            )
-            // Enable alpha blending
-            .color_blend_state(
-                vk::pipeline::graphics::color_blend::ColorBlendState::new(1).blend_alpha(),
-            )
-            // We'll define the viewport & scissor when we render.
-            .viewport_state(
-                vk::pipeline::graphics::viewport::ViewportState::viewport_dynamic_scissor_dynamic(
-                    1,
+                rasterization_state: Some(Default::default()),
+                input_assembly_state: Some(Default::default()),
+                // Do not use depth or stencil testing.
+                depth_stencil_state: None,
+                // Enable alpha blending
+                color_blend_state: Some(
+                    vk::pipeline::graphics::color_blend::ColorBlendState::with_attachment_states(
+                        1,
+                        vk::pipeline::graphics::color_blend::ColorBlendAttachmentState {
+                            blend: Some(
+                                vk::pipeline::graphics::color_blend::AttachmentBlend::alpha(),
+                            ),
+                            ..Default::default()
+                        },
+                    ),
                 ),
-            )
-            .with_auto_layout(context.device().clone(), |descriptor_set_infos| {
-                // Adjust the pipeline to fit our sampler.
-                let sampler_descriptor_set = descriptor_set_infos[0].bindings.get_mut(&0).unwrap();
-                sampler_descriptor_set.immutable_samplers = vec![sampler.clone()];
-            })?;
+                multisample_state: Some(Default::default()),
+                viewport_state: Some(Default::default()),
+                // Enable dynamic scissoring
+                dynamic_state: [
+                    vk::pipeline::DynamicState::Viewport,
+                    vk::pipeline::DynamicState::Scissor,
+                ]
+                .into_iter()
+                .collect(),
+                // Use the render pass we described above
+                subpass: Some(
+                    vk::pipeline::graphics::subpass::PipelineSubpassType::BeginRenderPass(
+                        render_pass.clone().first_subpass(),
+                    ),
+                ),
+                ..vk::pipeline::graphics::GraphicsPipelineCreateInfo::layout(layout)
+            },
+        )?;
 
         let font_texture = Self::_create_texture(
             Self::FONT_TEXTURE_ID,
@@ -554,7 +603,7 @@ impl Renderer {
 
     pub fn create_texture(
         &mut self,
-        image_view: Arc<dyn vk::image::ImageViewAbstract>,
+        image_view: Arc<vk::image::view::ImageView>,
     ) -> Result<Arc<Texture>> {
         let id = TextureId::new(self.next_texture_id);
         let texture = Self::_create_texture(
@@ -571,7 +620,7 @@ impl Renderer {
 
     fn _create_texture(
         id: TextureId,
-        image_view: Arc<dyn vk::image::ImageViewAbstract>,
+        image_view: Arc<vk::image::view::ImageView>,
         descriptor_set_allocator: &vk::descriptor_set::allocator::StandardDescriptorSetAllocator,
         sampler_descriptor_set_layout: Arc<vk::descriptor_set::layout::DescriptorSetLayout>,
     ) -> Result<Arc<Texture>> {
@@ -583,6 +632,7 @@ impl Renderer {
                 [vk::descriptor_set::WriteDescriptorSet::image_view(
                     0, image_view,
                 )],
+                [],
             )?,
         }))
     }
@@ -653,8 +703,8 @@ impl Target {
             };
 
             // Get the next framebuffer from the swapchain.
-            match vk::swapchain::acquire_next_image(swapchain.clone(), None) {
-                Ok((index, suboptimal, ready)) => {
+            match vk::swapchain::acquire_next_image(swapchain.clone(), None)? {
+                (index, suboptimal, ready) => {
                     let index = index as usize;
                     let framebuffer = framebuffers[index].clone();
                     if suboptimal {
@@ -670,13 +720,6 @@ impl Target {
                         ready,
                     });
                 }
-                Err(vk::swapchain::AcquireError::OutOfDate) => {
-                    // We could not acquire a framebuffer because the surface has changed such that
-                    // our swapchain is invalid. Recreate the swapchain and try again.
-                    self.invalidate();
-                    continue;
-                }
-                Err(e) => bail!(e),
             }
         }
     }
@@ -689,18 +732,21 @@ impl Target {
             Framebuffers::Invalid { old_swapchain } => old_swapchain,
         };
 
-        let min_image_count = renderer
+        let surface_caps = renderer
             .context
             .device()
             .physical_device()
-            .surface_capabilities(&self.surface, Default::default())?
-            .min_image_count;
+            .surface_capabilities(&self.surface, Default::default())?;
+        let mut image_extent = surface_caps.current_extent.unwrap_or([0, 0]);
+        image_extent[0] = image_extent[0].max(1);
+        image_extent[1] = image_extent[1].max(1);
 
         let swapchain_info = vk::swapchain::SwapchainCreateInfo {
-            min_image_count,
-            image_format: Some(renderer.color_format),
+            min_image_count: surface_caps.min_image_count,
+            image_format: renderer.color_format,
             image_color_space: vk::swapchain::ColorSpace::SrgbNonLinear,
             image_usage: vk::image::ImageUsage::COLOR_ATTACHMENT,
+            image_extent,
             ..Default::default()
         };
 
