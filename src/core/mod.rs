@@ -143,7 +143,7 @@ impl Core {
 
     /// Restores a savestate.
     /// Returns a reference to the temporary buffer containing the decompressed state.
-    pub fn restore_state(&mut self, state: SavestateRef<'_>) -> SavestateBuffer<'_> {
+    pub fn restore_state(&mut self, state: SavestateRef) -> SavestateBuffer<'_> {
         assert_eq!(state.core_id(), self.id);
         state.decompress(&mut self.savestate_buffer);
 
@@ -159,13 +159,9 @@ impl Core {
 
     /// Restores a delta savestate, given its parent savestate.
     /// Returns a reference to the temporary buffer containing the decompressed state.
-    pub fn restore_delta(
-        &mut self,
-        state: &DeltaSavestate,
-        parent: &Savestate,
-    ) -> SavestateBuffer<'_> {
+    pub fn restore_delta(&mut self, state: &DeltaSavestate) -> SavestateBuffer<'_> {
         assert_eq!(state.core_id, self.id);
-        state.decompress(parent, &mut self.savestate_buffer);
+        state.decompress(&mut self.savestate_buffer);
 
         unsafe {
             assert!((symbols().retro_unserialize)(

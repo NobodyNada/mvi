@@ -1,4 +1,8 @@
-use std::io::{Read, Write};
+use std::{
+    fmt::Debug,
+    io::{Read, Write},
+    sync::Arc,
+};
 
 use flate2::{
     bufread::{DeflateDecoder, DeflateEncoder},
@@ -25,37 +29,38 @@ impl<'a> SavestateBuffer<'a> {
         buf.shrink_to_fit();
 
         Savestate {
-            state: buf.into_boxed_slice(),
+            state: buf.into(),
             core_id: self.core_id,
         }
     }
 }
 
-/// A reference to a compressed savestate living somewhere in memory.
-#[derive(Clone, Copy)]
-pub enum SavestateRef<'a> {
-    Full(&'a Savestate),
-    Delta(&'a DeltaSavestate, &'a Savestate),
+/// Either a Savestate, or a DeltaSavestate paired with its parent.
+#[derive(Clone)]
+pub enum SavestateRef {
+    Full(Savestate),
+    Delta(DeltaSavestate),
 }
 
-impl<'a> SavestateRef<'a> {
+impl SavestateRef {
     pub(super) fn core_id(&self) -> usize {
         match self {
             SavestateRef::Full(s) => s.core_id,
-            SavestateRef::Delta(s, _) => s.core_id,
+            SavestateRef::Delta(s) => s.core_id,
         }
     }
     pub(super) fn decompress(&self, buf: &mut [u8]) {
         match self {
             SavestateRef::Full(state) => state.decompress(buf),
-            SavestateRef::Delta(state, parent) => state.decompress(parent, buf),
+            SavestateRef::Delta(state) => state.decompress(buf),
         }
     }
 }
 
-/// An owned, compressed savestate.
+/// A savestate that is compressed, but not with delta compression.
+#[derive(Clone)]
 pub struct Savestate {
-    state: Box<[u8]>,
+    state: Arc<[u8]>,
     pub(super) core_id: usize,
 }
 
@@ -100,17 +105,34 @@ impl Savestate {
 
         dst_buf.shrink_to_fit();
         DeltaSavestate {
-            state: dst_buf.into_boxed_slice(),
-            parent_addr: &*parent.state,
+            state: dst_buf.into(),
+            parent: parent.state.clone(),
             core_id: self.core_id,
         }
     }
 }
 
+impl Debug for Savestate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Savestate (compressed size: {}, addr: {:?})",
+            self.size(),
+            &*self.state as *const [u8]
+        )
+    }
+}
+
+#[derive(Clone)]
 pub struct DeltaSavestate {
-    state: Box<[u8]>,
-    parent_addr: *const [u8],
+    state: Arc<[u8]>,
+    parent: Arc<[u8]>,
     pub(super) core_id: usize,
+}
+impl Debug for DeltaSavestate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeltaSavestate (compressed size: {})", self.size())
+    }
 }
 unsafe impl Send for DeltaSavestate {}
 
@@ -119,13 +141,14 @@ impl DeltaSavestate {
         self.state.len()
     }
 
-    pub(super) fn decompress(&self, parent: &Savestate, dst_buf: &mut [u8]) {
+    pub fn parent_is(&self, other: &Savestate) -> bool {
+        self.parent == other.state
+    }
+
+    pub(super) fn decompress(&self, dst_buf: &mut [u8]) {
         const BUFSIZE: usize = 16834;
 
-        assert!(self.parent_addr == &*parent.state as *const [u8]);
-        assert!(self.core_id == parent.core_id);
-
-        parent.decompress(dst_buf);
+        let mut parent_decoder = DeflateDecoder::new(&*self.parent);
 
         let mut i = &mut dst_buf[..];
         let mut delta_buf = [0u8; BUFSIZE];
@@ -135,8 +158,10 @@ impl DeltaSavestate {
             let len = decoder.read(&mut delta_buf).unwrap();
             if len == 0 {
                 assert_eq!(i.len(), 0);
+                assert!(parent_decoder.read(&mut [0]).unwrap() == 0);
                 break;
             }
+            parent_decoder.read_exact(&mut i[..len]).unwrap();
 
             let j = &mut delta_buf[..len];
             i.iter_mut().zip(j.iter()).for_each(|(i, j)| *i ^= *j);
@@ -144,16 +169,14 @@ impl DeltaSavestate {
         }
     }
 
-    pub fn reparent(&mut self, old_parent: &Savestate, new_parent: &Savestate) {
+    pub fn reparent(&mut self, new_parent: &Savestate) {
         use flate2::write::DeflateEncoder;
         const BUFSIZE: usize = 16834;
 
-        assert!(self.core_id == old_parent.core_id);
         assert!(self.core_id == new_parent.core_id);
-        assert!(self.parent_addr == &*old_parent.state as *const [u8]);
 
         let mut self_decoder = DeflateDecoder::new(&*self.state);
-        let mut old_decoder = DeflateDecoder::new(&*old_parent.state);
+        let mut old_decoder = DeflateDecoder::new(&*self.parent);
         let mut new_decoder = DeflateDecoder::new(&*new_parent.state);
 
         let mut dst_buf = Vec::new();
@@ -185,7 +208,7 @@ impl DeltaSavestate {
         encoder.finish().unwrap();
 
         dst_buf.shrink_to_fit();
-        self.state = dst_buf.into_boxed_slice();
-        self.parent_addr = &*new_parent.state as *const [u8];
+        self.state = dst_buf.into();
+        self.parent = new_parent.state.clone();
     }
 }
