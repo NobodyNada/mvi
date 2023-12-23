@@ -67,7 +67,7 @@ impl PianoRoll {
         self.pending_scroll_lock = Some(event);
     }
 
-    pub fn draw(&mut self, ui: &mut Ui, tas: &mut Tas) {
+    pub fn draw(&mut self, ui: &Ui, tas: &mut Tas) {
         if !ui.is_mouse_down(imgui::MouseButton::Left) {
             self.drag_mode = None;
         }

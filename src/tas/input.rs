@@ -58,7 +58,9 @@ impl Joypad {
     }
 
     pub fn read(&self, data: &[u8], id: u32) -> bool {
-        assert!((id as usize) < self.buttons().len());
+        if (id as usize) >= self.buttons().len() {
+            return false;
+        }
         match self {
             Joypad::Snes => ((data[id as usize / 8] >> (id as usize % 8)) & 1) != 0,
         }

@@ -8,16 +8,25 @@ edition = "2021"
 [dependencies]
 anyhow = { version = "1.0.72", features = ["backtrace"] }
 bytemuck = { version = "1.14.0", features = ["derive"] }
+cfg-if = "1.0.0"
+crossbeam = "0.8.2"
+dirs = "5.0.1"
 flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] }
-imgui = { version = "0.11.0", features = ["docking"] }
+imgui = { version = "0.11.0", features = ["docking", "tables-api"] }
 imgui-winit-support = "0.11.0"
 libloading = "0.8.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
+reqwest = "0.11.23"
+rfd = { git = "https://github.com/NobodyNada/rfd", branch = "macos-title-message" }
+rust-ini = "0.20.0"
 smallvec = "1.11.2"
+thiserror = "1.0.51"
+tokio = { version = "1.35.1", features = ["rt-multi-thread"] }
 vulkano = "0.34.0"
 vulkano-shaders = "0.34.0"
 vulkano-util = "0.34.0"
 winit = "0.27"
+zip = { version = "0.6.6", features = ["deflate", "zstd", "bzip2"], default-features = false }
 
 [profile.dev]
 opt-level = 1

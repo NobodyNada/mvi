@@ -3,6 +3,7 @@
 use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
+    os::unix::ffi::OsStrExt,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex, RwLock,
@@ -12,6 +13,8 @@ use std::{
 use anyhow::{ensure, Result};
 use libloading::Library;
 use libretro_ffi::*;
+
+pub mod info;
 
 mod savestate;
 pub use savestate::*;
@@ -66,7 +69,7 @@ static CORE: Mutex<Option<CoreImpl>> = Mutex::new(None);
 static SYMBOLS: RwLock<Option<CoreSymbols>> = RwLock::new(None);
 static ID: AtomicUsize = AtomicUsize::new(0);
 impl Core {
-    pub unsafe fn load(path: &str, game_path: &str) -> Result<Core> {
+    pub unsafe fn load(path: &std::path::Path, game_path: &std::path::Path) -> Result<Core> {
         unsafe {
             CoreImpl::load(path)?;
 
@@ -76,7 +79,7 @@ impl Core {
 
             let game_info = if system_info.need_fullpath {
                 retro_game_info {
-                    path: game_path.as_bytes().as_ptr().cast(),
+                    path: game_path.as_os_str().as_bytes().as_ptr().cast(),
                     data: std::ptr::null(),
                     size: 0,
                     meta: std::ptr::null(),
@@ -280,7 +283,7 @@ impl TryFrom<retro_pixel_format> for PixelFormat {
 }
 
 impl CoreImpl {
-    unsafe fn load(path: &str) -> Result<()> {
+    unsafe fn load(path: &std::path::Path) -> Result<()> {
         let mut lock = CORE.lock().unwrap();
         assert!(lock.is_none(), "Only one core can be loaded at once");
 

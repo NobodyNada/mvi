@@ -60,14 +60,7 @@ pub enum RecordMode {
 }
 
 impl Tas {
-    pub fn new() -> Result<Tas> {
-        let mut core = unsafe {
-            Core::load(
-                "cores/bsnes2014_accuracy_libretro.dylib",
-                "/Users/jonathan/code/sm/ntsc.sfc",
-            )?
-        };
-
+    pub fn new(mut core: Core) -> Result<Tas> {
         let input_port = input::InputPort::Joypad(input::Joypad::Snes);
 
         let frame_0 = core.save_state();

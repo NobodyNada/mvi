@@ -27,7 +27,7 @@ const WINDOW_TITLE: &str = "mvi";
 // TODO: the bottom window of a vertically stacked configuration is offset
 
 pub fn run(
-    mut event_callback: impl FnMut(&Event<()>, &mut Context, &Window) + Send,
+    mut event_callback: impl FnMut(Event<()>, &mut Context, &Window) + Send,
     mut render_callback: impl FnMut(&mut Ui, &mut render::Renderer) + Send,
 ) -> Result<()> {
     // Create the application event loop
@@ -108,6 +108,7 @@ pub fn run(
                 imgui.io_mut().config_flags.insert(
                     imgui::ConfigFlags::DOCKING_ENABLE | imgui::ConfigFlags::VIEWPORTS_ENABLE,
                 );
+                imgui.io_mut().mouse_double_click_time = 0.5;
 
                 let mut platform = WinitPlatform::init(&mut imgui);
                 platform.attach_window(imgui.io_mut(), &*window, HiDpiMode::Default);
@@ -244,7 +245,7 @@ pub fn run(
                             // https://github.com/rust-windowing/winit/issues/2876
                             continue;
                         }
-                        event_callback(&event, &mut imgui, &window);
+                        event_callback(event.clone(), &mut imgui, &window);
 
                         if !matches!(event, Event::WindowEvent { .. }) {
                             platform.handle_event(imgui.io_mut(), &window, &event);
@@ -267,7 +268,7 @@ pub fn run(
                                     (*viewport, &**window, target)
                                 } else {
                                     // the event is not for us
-                                    return;
+                                    continue;
                                 };
 
                                 let viewport = imgui.viewport_by_id_mut(viewport).unwrap();
