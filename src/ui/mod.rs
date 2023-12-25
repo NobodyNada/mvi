@@ -148,26 +148,54 @@ impl Ui {
             let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([0., 0.]));
             let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(0.));
             let _border = ui.push_style_var(imgui::StyleVar::WindowBorderSize(0.));
-            let token = ui
-                .window("mvi")
+            ui.window("mvi")
                 .position(<[f32; 2]>::from(viewport.Pos), imgui::Condition::Always)
                 .size([viewport.Size.x, viewport.Size.y], imgui::Condition::Always)
                 .flags(flags)
-                .begin();
+                .begin()
+        };
+
+        let dockspace_id = unsafe { std::mem::transmute::<_, u32>(ui.new_id_str("MviDockspace")) };
+
+        unsafe {
+            let dockspace_needs_setup = imgui::sys::igDockBuilderGetNode(dockspace_id).is_null();
 
             let menu_height =
                 imgui::sys::ImGuiWindow_MenuBarHeight(imgui::sys::igGetCurrentWindowRead());
-
-            let id = imgui::sys::igGetID_Str("MviDockspace".as_ptr() as *const std::ffi::c_char);
             imgui::sys::igDockSpace(
-                id,
+                dockspace_id,
                 [ui.window_size()[0], ui.window_size()[1] - menu_height].into(),
                 imgui::sys::ImGuiDockNodeFlags_PassthruCentralNode as i32,
                 std::ptr::null(),
             );
+            if dockspace_needs_setup {
+                let (mut left, mut right) = (0, 0);
+                imgui::sys::igDockBuilderSplitNode(
+                    dockspace_id,
+                    imgui::sys::ImGuiDir_Left,
+                    0.2,
+                    &mut left,
+                    &mut right,
+                );
 
-            token
-        };
+                imgui::sys::igDockBuilderDockWindow(
+                    std::ffi::CString::new("Piano Roll")
+                        .unwrap()
+                        .as_bytes_with_nul()
+                        .as_ptr()
+                        .cast(),
+                    left,
+                );
+                imgui::sys::igDockBuilderDockWindow(
+                    std::ffi::CString::new("Game View")
+                        .unwrap()
+                        .as_bytes_with_nul()
+                        .as_ptr()
+                        .cast(),
+                    right,
+                );
+            }
+        }
 
         self.draw_menu(ui);
         self.draw_core_selector(ui);
