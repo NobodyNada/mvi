@@ -105,6 +105,10 @@ pub fn run(
             .spawn_scoped(scope, move || {
                 // Initialize and configure imgui.
                 let mut imgui = Context::create();
+                let mut ini_path = dirs::data_local_dir().unwrap();
+                ini_path.push("mvi");
+                ini_path.push("imgui.ini");
+                imgui.set_ini_filename(ini_path);
                 imgui.io_mut().config_flags.insert(
                     imgui::ConfigFlags::DOCKING_ENABLE | imgui::ConfigFlags::VIEWPORTS_ENABLE,
                 );
