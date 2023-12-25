@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::{mpsc, Arc},
-};
+use std::sync::{mpsc, Arc};
 
 use anyhow::{anyhow, bail, Error, Result};
 use crossbeam::atomic::AtomicCell;
@@ -10,7 +7,7 @@ use vulkano as vk;
 
 use crate::{
     core::{self, Frame},
-    tas::Tas,
+    tas::{self, Tas},
 };
 
 use self::backend::render::Renderer;
@@ -26,15 +23,17 @@ pub struct Ui {
     framebuffer: Option<Framebuffer>,
 
     core_db: Option<core::info::CoreDb>,
+    movie_cache: tas::movie::file::MovieCache,
 
-    download_progress: Option<Download>,
     tokio: tokio::runtime::Runtime,
 
-    core_selector: Option<CoreSelector>,
-
-    reported_error: Option<ReportedError>,
-
     modifiers: winit::event::ModifiersState,
+
+    // Modal window state
+    download_progress: Option<Download>,
+    core_selector: Option<menu::CoreSelector>,
+    hash_mismatch: Option<menu::HashMismatch>,
+    reported_error: Option<ReportedError>,
 }
 
 struct Download {
@@ -51,15 +50,6 @@ enum DownloadItem {
             Box<dyn FnOnce(&mut Ui, core::info::Result<std::path::PathBuf>) + Send + 'static>,
         )>,
     },
-}
-
-struct CoreSelector {
-    extension: Option<String>,
-    show_experimental: bool,
-    show_non_matching: bool,
-    selected_core_id: Option<String>,
-    downloaded_cores: HashSet<String>,
-    callback: Box<dyn FnOnce(&mut Ui, &str) + Send>,
 }
 
 struct ReportedError {
@@ -112,11 +102,13 @@ pub fn run() -> Result<()> {
         piano_roll: piano_roll::PianoRoll::new(),
         framebuffer: None,
         core_db,
-        core_selector: None,
-        download_progress,
+        movie_cache: tas::movie::file::MovieCache::load(),
         tokio,
 
+        download_progress,
         reported_error: None,
+        core_selector: None,
+        hash_mismatch: None,
 
         modifiers: Default::default(),
     };
@@ -177,37 +169,9 @@ impl Ui {
             token
         };
 
-        if self.tas.is_some() {
-            ui.window("Game View")
-                .size([512., 448.], imgui::Condition::FirstUseEver)
-                .build(|| {
-                    let tas = self.tas.as_mut().unwrap();
-                    let av = tas.av_info();
-                    let aspect_ratio = av.geometry.aspect_ratio;
-                    let available_size = ui.content_region_avail();
-                    let (w, h) = [
-                        (available_size[0], available_size[0] / aspect_ratio),
-                        (available_size[1] * aspect_ratio, available_size[1]),
-                    ]
-                    .into_iter()
-                    .filter(|(w, h)| w <= &available_size[0] && h <= &available_size[1])
-                    .max_by(|(w1, _), (w2, _)| w1.partial_cmp(w2).unwrap())
-                    .unwrap();
-
-                    let (frame, framebuffer) = self.run_frame(renderer).unwrap();
-
-                    let crop_x = frame.width as f32 / av.geometry.max_width as f32;
-                    let crop_y = frame.height as f32 / av.geometry.max_height as f32;
-                    imgui::Image::new(framebuffer.texture.id, [w, h])
-                        .uv1([crop_x, crop_y])
-                        .build(ui)
-                });
-
-            self.piano_roll.draw(ui, self.tas.as_mut().unwrap());
-        }
-
         self.draw_menu(ui);
         self.draw_core_selector(ui);
+        self.draw_hash_mismatch(ui);
 
         if let Some(error) = &self.reported_error {
             const ID: &str = "Error";
@@ -296,6 +260,35 @@ impl Ui {
             if completed {
                 self.download_progress = None;
             }
+        }
+
+        if self.tas.is_some() {
+            ui.window("Game View")
+                .size([512., 448.], imgui::Condition::FirstUseEver)
+                .build(|| {
+                    let tas = self.tas.as_mut().unwrap();
+                    let av = tas.av_info();
+                    let aspect_ratio = av.geometry.aspect_ratio;
+                    let available_size = ui.content_region_avail();
+                    let (w, h) = [
+                        (available_size[0], available_size[0] / aspect_ratio),
+                        (available_size[1] * aspect_ratio, available_size[1]),
+                    ]
+                    .into_iter()
+                    .filter(|(w, h)| w <= &available_size[0] && h <= &available_size[1])
+                    .max_by(|(w1, _), (w2, _)| w1.partial_cmp(w2).unwrap())
+                    .unwrap();
+
+                    let (frame, framebuffer) = self.run_frame(renderer).unwrap();
+
+                    let crop_x = frame.width as f32 / av.geometry.max_width as f32;
+                    let crop_y = frame.height as f32 / av.geometry.max_height as f32;
+                    imgui::Image::new(framebuffer.texture.id, [w, h])
+                        .uv1([crop_x, crop_y])
+                        .build(ui)
+                });
+
+            self.piano_roll.draw(ui, self.tas.as_mut().unwrap());
         }
     }
 
@@ -443,7 +436,7 @@ impl Ui {
         }
     }
 
-    fn handle_error<F: FnOnce(&mut Ui) -> Result<(), E>, E: Into<anyhow::Error>>(&mut self, f: F) {
+    fn handle_error<F: FnOnce(&mut Ui) -> anyhow::Result<()>>(&mut self, f: F) {
         match f(self) {
             Ok(()) => {}
             Err(e) => self.report_error(e.into(), false),

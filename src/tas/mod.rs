@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use anyhow::Result;
-
 use crate::core::{self, Core};
 
 use self::movie::Movie;
@@ -33,11 +31,6 @@ pub struct Tas {
 }
 
 #[derive(Clone, Debug)]
-pub struct Pattern {
-    pub data: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
 pub enum RunMode {
     Running {
         stop_at: Option<u32>,
@@ -55,17 +48,53 @@ impl Default for RunMode {
 #[derive(Clone, Debug)]
 pub enum RecordMode {
     ReadOnly,
-    Insert(Pattern),
-    Overwrite(Pattern),
+    Insert(movie::Pattern),
+    Overwrite(movie::Pattern),
 }
 
 impl Tas {
-    pub fn new(mut core: Core) -> Result<Tas> {
-        let input_port = input::InputPort::Joypad(input::Joypad::Snes);
+    pub fn new(mut core: Core) -> Tas {
+        let input_ports = vec![input::InputPort::Joypad(input::Joypad::Snes)];
 
         let frame_0 = core.save_state();
 
-        let movie = Movie::new(input_port, frame_0.compress());
+        let movie = Movie::new(
+            input_ports,
+            frame_0.compress(),
+            core.id.clone(),
+            core.rom_path.clone(),
+            core.rom_sha256,
+        );
+        Tas {
+            playback_cursor: 0,
+            next_emulator_frame: 0,
+            run_mode: RunMode::Paused,
+            last_host_frame: Instant::now(),
+            core_frame_fraction: 0.,
+
+            selected_frame: 0,
+            selection_locked: true,
+
+            movie,
+            core,
+        }
+    }
+
+    pub fn load(
+        mut core: Core,
+        file: movie::file::MovieFile,
+        movie_path: std::path::PathBuf,
+    ) -> anyhow::Result<Tas> {
+        let frame_0 = core.save_state();
+        let movie = Movie::load(
+            file,
+            movie_path,
+            frame_0.compress(),
+            core.id.clone(),
+            core.rom_path.clone(),
+            core.rom_sha256,
+        )?;
+
         Ok(Tas {
             playback_cursor: 0,
             next_emulator_frame: 0,
@@ -93,13 +122,17 @@ impl Tas {
         &self.movie
     }
 
+    pub fn set_movie_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.movie.movie_path = path;
+    }
+
     pub fn run_guest_frame(&mut self) -> &core::Frame {
         let frame = if self.next_emulator_frame < self.movie.len() {
             self.movie.frame(self.next_emulator_frame)
         } else {
             self.movie.default_frame()
         };
-        self.core.run_frame(frame, self.movie.input_port);
+        self.core.run_frame(frame, &self.movie.input_ports);
         self.next_emulator_frame += 1;
         self.movie
             .greenzone
@@ -192,7 +225,7 @@ impl Tas {
         self.run_mode = mode;
     }
 
-    pub fn set_input(&mut self, pattern: &Pattern) {
+    pub fn set_input(&mut self, pattern: &movie::Pattern) {
         let mut mode = std::mem::take(self.run_mode_mut());
         match &mut mode {
             RunMode::Paused => self

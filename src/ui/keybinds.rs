@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
 use crate::{
-    tas::{self, Pattern, Tas},
+    tas::{self, movie::Pattern, Tas},
     ui::piano_roll::ScrollLock,
 };
 
@@ -122,8 +122,8 @@ impl Keybinds {
             }
             (Mode::Insert(pattern) | Mode::Replace(pattern), NONE, k) => {
                 if let Some(id) = self.input_bindings.get(&k) {
-                    if tas.movie().input_port().read(&pattern.data, 0, *id) != 1 {
-                        tas.movie().input_port().write(&mut pattern.data, 0, *id, 1);
+                    if pattern.read(tas.movie().input_ports(), 0, 0, *id) != 1 {
+                        pattern.write(&tas.movie().input_ports(), 0, 0, *id, 1);
                         tas.set_input(pattern);
                     }
                 }
@@ -144,8 +144,8 @@ impl Keybinds {
         match (&mut self.mode, modifiers, key) {
             (Mode::Insert(pattern) | Mode::Replace(pattern), NONE, k) => {
                 if let Some(id) = self.input_bindings.get(&k) {
-                    if tas.movie().input_port().read(&pattern.data, 0, *id) != 0 {
-                        tas.movie().input_port().write(&mut pattern.data, 0, *id, 0);
+                    if pattern.read(tas.movie().input_ports(), 0, 0, *id) != 0 {
+                        pattern.write(tas.movie().input_ports(), 0, 0, *id, 0);
                         tas.set_input(pattern);
                     }
                 }

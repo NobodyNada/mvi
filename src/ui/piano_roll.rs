@@ -92,7 +92,8 @@ impl PianoRoll {
 
                 let clipper = ListClipper::new(rows.try_into().unwrap()).begin(ui);
 
-                let input_port = tas.movie().input_port();
+                // TODO: multi-input support
+                let input_port = tas.movie().input_ports()[0];
                 let buttons = match input_port {
                     InputPort::Joypad(j) => j.buttons(),
                 };
@@ -169,7 +170,7 @@ impl PianoRoll {
                     }
 
                     for (index, text) in buttons.iter().enumerate() {
-                        let frame = tas.frame(row);
+                        let frame = &tas.frame(row)[0..input_port.frame_size()];
                         let pressed = input_port.read(frame, 0, index as u32);
                         let color = if pressed != 0 {
                             Self::PRESSED_COLOR
@@ -185,7 +186,7 @@ impl PianoRoll {
                                 index: index as u32,
                                 last: row,
                             });
-                            let frame = tas.frame_mut(row);
+                            let frame = &mut tas.frame_mut(row)[0..input_port.frame_size()];
                             input_port.write(frame, 0, index as u32, (pressed == 0) as i16);
                         } else if let Some(DragMode::Input { index, last }) = &mut self.drag_mode {
                             if ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
@@ -196,7 +197,7 @@ impl PianoRoll {
                                 let min = std::cmp::min(row, *last + 1);
                                 let max = std::cmp::max(row + 1, *last);
                                 for i in min..max {
-                                    let frame = tas.frame_mut(i);
+                                    let frame = &mut tas.frame_mut(i)[0..input_port.frame_size()];
                                     input_port.write(
                                         frame,
                                         0,

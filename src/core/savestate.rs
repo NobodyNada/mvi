@@ -5,7 +5,7 @@ use std::{
 };
 
 use flate2::{
-    bufread::{DeflateDecoder, DeflateEncoder},
+    bufread::{ZlibDecoder, ZlibEncoder},
     Compression,
 };
 
@@ -23,7 +23,7 @@ impl<'a> SavestateBuffer<'a> {
 
     pub fn compress(&self) -> Savestate {
         let mut buf = Vec::new();
-        DeflateEncoder::new(self.state, Compression::fast())
+        ZlibEncoder::new(self.state, Compression::fast())
             .read_to_end(&mut buf)
             .unwrap();
         buf.shrink_to_fit();
@@ -70,20 +70,20 @@ impl Savestate {
     }
 
     pub(super) fn decompress(&self, buf: &mut [u8]) {
-        let mut decoder = DeflateDecoder::new(&*self.state);
+        let mut decoder = ZlibDecoder::new(&*self.state);
         decoder.read_exact(buf).unwrap();
         assert!(decoder.read(&mut [0]).unwrap() == 0, "expected EOF");
     }
 
     pub fn to_delta(&self, parent: &Savestate) -> DeltaSavestate {
-        use flate2::write::DeflateEncoder;
+        use flate2::write::ZlibEncoder;
         const BUFSIZE: usize = 16834;
 
-        let mut self_decoder = DeflateDecoder::new(&*self.state);
-        let mut parent_decoder = DeflateDecoder::new(&*parent.state);
+        let mut self_decoder = ZlibDecoder::new(&*self.state);
+        let mut parent_decoder = ZlibDecoder::new(&*parent.state);
 
         let mut dst_buf = Vec::new();
-        let mut encoder = DeflateEncoder::new(&mut dst_buf, Compression::fast());
+        let mut encoder = ZlibEncoder::new(&mut dst_buf, Compression::fast());
 
         let mut a = [0u8; BUFSIZE];
         let mut b = [0u8; BUFSIZE];
@@ -148,11 +148,11 @@ impl DeltaSavestate {
     pub(super) fn decompress(&self, dst_buf: &mut [u8]) {
         const BUFSIZE: usize = 16834;
 
-        let mut parent_decoder = DeflateDecoder::new(&*self.parent);
+        let mut parent_decoder = ZlibDecoder::new(&*self.parent);
 
         let mut i = &mut dst_buf[..];
         let mut delta_buf = [0u8; BUFSIZE];
-        let mut decoder = DeflateDecoder::new(&*self.state);
+        let mut decoder = ZlibDecoder::new(&*self.state);
 
         loop {
             let len = decoder.read(&mut delta_buf).unwrap();
@@ -170,17 +170,17 @@ impl DeltaSavestate {
     }
 
     pub fn reparent(&mut self, new_parent: &Savestate) {
-        use flate2::write::DeflateEncoder;
+        use flate2::write::ZlibEncoder;
         const BUFSIZE: usize = 16834;
 
         assert!(self.core_id == new_parent.core_id);
 
-        let mut self_decoder = DeflateDecoder::new(&*self.state);
-        let mut old_decoder = DeflateDecoder::new(&*self.parent);
-        let mut new_decoder = DeflateDecoder::new(&*new_parent.state);
+        let mut self_decoder = ZlibDecoder::new(&*self.state);
+        let mut old_decoder = ZlibDecoder::new(&*self.parent);
+        let mut new_decoder = ZlibDecoder::new(&*new_parent.state);
 
         let mut dst_buf = Vec::new();
-        let mut encoder = DeflateEncoder::new(&mut dst_buf, Compression::fast());
+        let mut encoder = ZlibEncoder::new(&mut dst_buf, Compression::fast());
 
         let mut a = [0u8; BUFSIZE];
         let mut o = [0u8; BUFSIZE];

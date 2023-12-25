@@ -1,17 +1,161 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 
-use std::collections::HashMap;
+use sha2::Digest;
 
 use super::*;
+
+pub(super) struct CoreSelector {
+    extension: Option<String>,
+    show_experimental: bool,
+    show_non_matching: bool,
+    selected_core_id: Option<String>,
+    downloaded_cores: HashSet<String>,
+    callback: Box<dyn FnOnce(&mut Ui, &str) + Send>,
+}
+
+pub(super) struct HashMismatch {
+    movie_file: tas::movie::file::MovieFile,
+    movie_path: std::path::PathBuf,
+    rom_path: std::path::PathBuf,
+    expected_hash: String,
+    actual_hash: String,
+}
 
 impl Ui {
     pub(super) fn draw_menu(&mut self, ui: &imgui::Ui) {
         ui.menu_bar(|| {
             ui.menu("File", || {
-                if ui.menu_item("Load ROM...") {
+                if ui.menu_item("New Movie...") {
                     self.load_rom();
                 }
+                if ui.menu_item("Open Movie...") {
+                    rfd::FileDialog::new()
+                        .add_filter("mvi movie file", &["mvi"])
+                        .set_title("Select a movie file")
+                        .pick_file()
+                        .map(|path| self.open_movie(path));
+                }
+                if !self.movie_cache.recents().is_empty() {
+                    ui.separator();
+                    ui.text_disabled("Recent Movies");
+                    for path in self.movie_cache.recents() {
+                        let label = format!(
+                            "{} ({})",
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            path.parent()
+                                .map(|p| p.to_string_lossy())
+                                .unwrap_or_default()
+                        );
+
+                        if ui.menu_item(label) {
+                            self.open_movie(path.clone());
+                            break;
+                        }
+                    }
+                }
+                ui.separator();
+                ui.enabled(self.tas.is_some(), || {
+                    let mut save_as = false;
+                    let mut save_path = None;
+                    if ui.menu_item("Save") {
+                        save_path = self.tas.as_ref().unwrap().movie().movie_path.clone();
+                        save_as = save_path.is_none();
+                    }
+                    if ui.menu_item("Save As...") || save_as {
+                        let rom_name = &self.tas.as_ref().unwrap().movie().rom_filename;
+                        let rom_name = rom_name
+                            .rsplit_once(".")
+                            .map(|(name, _ext)| name)
+                            .unwrap_or(rom_name);
+
+                        save_path = rfd::FileDialog::new()
+                            .add_filter("mvi movie file", &["mvi"])
+                            .set_file_name(format!("{rom_name}.mvi"))
+                            .save_file();
+                    }
+                    if let Some(path) = save_path {
+                        self.handle_error(|ui| {
+                            let tas = ui.tas.as_mut().unwrap();
+                            tas.movie().save(&path)?;
+                            tas.set_movie_path(Some(path.clone()));
+                            ui.movie_cache.update(
+                                path,
+                                tas.movie().rom_path.clone(),
+                                tas.movie().uuid,
+                            )?;
+                            Ok(())
+                        });
+                    }
+                });
             });
+        });
+    }
+
+    // Creating Movies
+
+    fn load_rom(&mut self) {
+        let Some(db) = &self.core_db else { return };
+
+        // Group extensions by system ID to create filters
+        #[derive(Debug)]
+        struct SystemExtensions<'a> {
+            system_name: Option<&'a String>,
+            supported_extensions: HashSet<&'a String>,
+        }
+        let mut extensions_by_system_id = HashMap::new();
+        for core in db.cores() {
+            extensions_by_system_id
+                .entry(core.system_id.as_ref().or(core.system_name.as_ref()))
+                .or_insert_with(|| SystemExtensions {
+                    system_name: core.system_name.as_ref().or(core.system_id.as_ref()),
+                    supported_extensions: HashSet::new(),
+                })
+                .supported_extensions
+                .extend(&core.supported_extensions);
+        }
+
+        let mut extensions_by_system_id = extensions_by_system_id.into_iter().collect::<Vec<_>>();
+        extensions_by_system_id.sort_by_key(|(s, _)| *s);
+
+        let mut file_picker = rfd::FileDialog::new().set_title("Select ROM");
+        for (
+            _,
+            SystemExtensions {
+                system_name,
+                supported_extensions,
+            },
+        ) in extensions_by_system_id
+        {
+            let name = system_name.map(|s| &**s).unwrap_or("Other");
+            let mut extensions: Vec<_> = supported_extensions.into_iter().collect();
+            extensions.sort();
+            file_picker = file_picker.add_filter(name, &extensions)
+        }
+
+        let Some(rom_path) = file_picker.pick_file() else {
+            return;
+        };
+
+        let extension = rom_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string);
+
+        self.handle_error(|ui| {
+            ui.select_core(extension, move |ui, core_id| {
+                ui.download_core(core_id, move |ui, core_path| {
+                    ui.handle_error(|ui| {
+                        let core_path = core_path?;
+                        ui.tas = None;
+                        ui.framebuffer = None;
+                        let core = unsafe { core::Core::load(&core_path, &rom_path)? };
+                        ui.tas = Some(Tas::new(core));
+                        Ok(())
+                    })
+                })
+            })
+            .map_err(Into::into)
         });
     }
 
@@ -152,70 +296,6 @@ impl Ui {
         }
     }
 
-    fn load_rom(&mut self) {
-        let Some(db) = &self.core_db else { return };
-
-        // Group extensions by system ID to create filters
-        #[derive(Debug)]
-        struct SystemExtensions<'a> {
-            system_name: Option<&'a String>,
-            supported_extensions: HashSet<&'a String>,
-        }
-        let mut extensions_by_system_id = HashMap::new();
-        for core in db.cores() {
-            extensions_by_system_id
-                .entry(core.system_id.as_ref().or(core.system_name.as_ref()))
-                .or_insert_with(|| SystemExtensions {
-                    system_name: core.system_name.as_ref().or(core.system_id.as_ref()),
-                    supported_extensions: HashSet::new(),
-                })
-                .supported_extensions
-                .extend(&core.supported_extensions);
-        }
-
-        let mut extensions_by_system_id = extensions_by_system_id.into_iter().collect::<Vec<_>>();
-        extensions_by_system_id.sort_by_key(|(s, _)| *s);
-
-        let mut file_picker = rfd::FileDialog::new().set_title("Select ROM");
-        for (
-            _,
-            SystemExtensions {
-                system_name,
-                supported_extensions,
-            },
-        ) in extensions_by_system_id
-        {
-            let name = system_name.map(|s| &**s).unwrap_or("Other");
-            let mut extensions: Vec<_> = supported_extensions.into_iter().collect();
-            extensions.sort();
-            file_picker = file_picker.add_filter(name, &extensions)
-        }
-
-        let Some(rom_path) = file_picker.pick_file() else {
-            return;
-        };
-
-        let extension = rom_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_string);
-
-        self.handle_error(|ui| {
-            ui.select_core(extension, move |ui, core_id| {
-                ui.download_core(core_id, move |ui, core_path| {
-                    ui.handle_error(|ui| -> anyhow::Result<()> {
-                        let core_path = core_path?;
-                        ui.tas = None;
-                        ui.framebuffer = None;
-                        let core = unsafe { core::Core::load(&core_path, &rom_path)? };
-                        ui.tas = Some(Tas::new(core)?);
-                        anyhow::Result::Ok(())
-                    })
-                })
-            })
-        });
-    }
-
     fn select_core<F: FnOnce(&mut Ui, &str) + Send + 'static>(
         &mut self,
         extension: Option<String>,
@@ -261,5 +341,163 @@ impl Ui {
             ))
             .unwrap()
         });
+    }
+
+    // Opening Movies
+
+    fn open_movie(&mut self, path: std::path::PathBuf) {
+        // **1.** Deserialize the movie file from disk
+        self.handle_error(|ui| {
+            let file = tas::movie::file::MovieFile::load(std::fs::File::open(&path)?)?;
+            ui.open_movie_file(file, path, true)
+        });
+    }
+
+    fn open_movie_file(
+        &mut self,
+        file: tas::movie::file::MovieFile,
+        movie_path: std::path::PathBuf,
+        allow_cached: bool,
+    ) -> anyhow::Result<()> {
+        // **2.** Select a ROM file (unless we have a cached movie file.)
+        let cached_path = if allow_cached {
+            self.movie_cache
+                .rom_path_for_uuid(file.uuid)
+                .filter(|p| p.exists())
+                .map(|p| p.to_owned())
+        } else {
+            None
+        };
+
+        let rom_path = cached_path.or_else(|| {
+            // No cached file, prompt the user
+            // Filter files by extensions supported by the movie's core
+            let mut extensions = self
+                .core_db
+                .as_ref()
+                .unwrap()
+                .cores()
+                .iter()
+                .find(|core| core.id == file.core_id)
+                .map(|core| {
+                    core.supported_extensions
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            // Also include the extension of the ROM filename associated with the movie
+            if let Some((_, e)) = file.rom_filename.rsplit_once(".") {
+                if extensions.iter().find(|&ext| ext == e).is_none() {
+                    extensions.push(e.to_string());
+                }
+            }
+            extensions.sort();
+
+            rfd::FileDialog::new()
+                .add_filter("ROM files", &extensions)
+                .set_title(format!("Locate ROM '{}'", file.rom_filename))
+                .pick_file()
+        });
+
+        let Some(rom_path) = rom_path else {
+            // No cached ROM was available, and the user did not select one.
+            return Ok(());
+        };
+
+        // **3.** See if its hash matches.
+        let rom_data = std::fs::read(&rom_path)?;
+        let hash: [u8; 32] = sha2::Sha256::digest(&rom_data).into();
+
+        if hash == file.rom_sha256 {
+            // The hash matched, proceed to load the core
+            self.open_movie_with_rom(file, movie_path, rom_path);
+        } else {
+            // The hash did not match, ask the user what the would like to do
+            fn to_hex_string(hash: [u8; 32]) -> String {
+                let mut result = String::with_capacity(hash.len() * 2);
+                for byte in hash {
+                    for digit in [byte >> 4, byte & 0xf] {
+                        result.push(char::from_digit(digit as u32, 16).unwrap());
+                    }
+                }
+                result
+            }
+            self.hash_mismatch = Some(HashMismatch {
+                expected_hash: to_hex_string(file.rom_sha256),
+                actual_hash: to_hex_string(hash),
+                movie_file: file,
+                rom_path,
+                movie_path,
+            })
+        }
+        Ok(())
+    }
+
+    pub(super) fn draw_hash_mismatch(&mut self, ui: &imgui::Ui) {
+        if let Some(mismatch) = self.hash_mismatch.as_mut() {
+            const ID: &str = "Hash mismatch";
+            if let Some(_token) = ui.begin_modal_popup(ID) {
+                ui.text(format!(
+                    "The selected ROM '{}' is not the same ROM that the movie was created with.",
+                    mismatch.rom_path.to_string_lossy()
+                ));
+
+                ui.text("ROM hash: ");
+                ui.same_line();
+                ui.text(&mismatch.actual_hash);
+
+                ui.text("Expected hash: ");
+                ui.same_line();
+                ui.text(&mismatch.expected_hash);
+
+                if ui.button("Select another ROM") {
+                    ui.close_current_popup();
+                    let mismatch = self.hash_mismatch.take().unwrap();
+                    self.handle_error(|ui| {
+                        ui.open_movie_file(mismatch.movie_file, mismatch.movie_path, false)
+                    })
+                }
+                if ui.button("Load ROM anyway") {
+                    ui.close_current_popup();
+                    let mismatch = self.hash_mismatch.take().unwrap();
+                    self.open_movie_with_rom(
+                        mismatch.movie_file,
+                        mismatch.movie_path,
+                        mismatch.rom_path,
+                    )
+                }
+                if ui.button("Cancel") {
+                    ui.close_current_popup();
+                    self.hash_mismatch = None;
+                }
+            } else {
+                ui.open_popup(ID);
+            }
+        }
+    }
+
+    fn open_movie_with_rom(
+        &mut self,
+        file: tas::movie::file::MovieFile,
+        movie_path: std::path::PathBuf,
+        rom_path: std::path::PathBuf,
+    ) {
+        self.download_core(&file.core_id.clone(), move |ui, core_path| {
+            ui.handle_error(move |ui| {
+                let core_path = core_path?;
+
+                // TODO: reset keybind state (like modes)
+                ui.tas = None;
+                ui.framebuffer = None;
+                let core = unsafe { core::Core::load(&core_path, &rom_path)? };
+
+                let uuid = file.uuid;
+                ui.tas = Some(Tas::load(core, file, movie_path.clone())?);
+                ui.movie_cache.update(movie_path, rom_path, uuid)?;
+                Ok(())
+            });
+        })
     }
 }

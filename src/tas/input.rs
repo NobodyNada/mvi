@@ -1,4 +1,6 @@
-#[derive(Copy, Clone, Debug)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum InputPort {
     Joypad(Joypad),
 }
@@ -41,7 +43,7 @@ impl InputPort {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum Joypad {
     Snes,
 }

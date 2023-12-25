@@ -9,6 +9,7 @@ edition = "2021"
 anyhow = { version = "1.0.72", features = ["backtrace"] }
 bytemuck = { version = "1.14.0", features = ["derive"] }
 cfg-if = "1.0.0"
+ciborium = "0.2.1"
 crossbeam = "0.8.2"
 dirs = "5.0.1"
 flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] }
@@ -19,9 +20,13 @@ libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
 reqwest = "0.11.23"
 rfd = { git = "https://github.com/NobodyNada/rfd", branch = "macos-title-message" }
 rust-ini = "0.20.0"
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
+sha2 = "0.10.8"
 smallvec = "1.11.2"
 thiserror = "1.0.51"
 tokio = { version = "1.35.1", features = ["rt-multi-thread"] }
+uuid = { version = "1.6.1", features = ["serde", "v4"] }
 vulkano = "0.34.0"
 vulkano-shaders = "0.34.0"
 vulkano-util = "0.34.0"

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use sha2::Digest;
 use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
@@ -28,18 +29,20 @@ pub struct Core {
     pub system_info: retro_system_info,
     pub av_info: retro_system_av_info,
     pub frame: Frame,
-    id: usize,
+    pub id: String,
+    pub rom_path: std::path::PathBuf,
+    pub rom_sha256: [u8; 32],
+    instance_id: usize,
     savestate_buffer: Box<[u8]>,
 }
 unsafe impl Send for Core {}
 
 pub struct CoreImpl {
     library: Library,
-    rom_buf: Option<Vec<u8>>,
     pixel_format: PixelFormat,
     frame: Frame,
-    input: Vec<u8>,
-    input_port: Option<InputPort>,
+    input: *const [u8],
+    input_ports: *const [InputPort],
 }
 
 // The input_callback cannot be safely sent across threads, but we are careful to never do so.
@@ -77,6 +80,9 @@ impl Core {
             (symbols().retro_get_system_info)(system_info.as_mut_ptr());
             let system_info = system_info.assume_init();
 
+            let rom = std::fs::read(game_path)?;
+            let rom_sha256 = sha2::Sha256::digest(&rom).into();
+
             let game_info = if system_info.need_fullpath {
                 retro_game_info {
                     path: game_path.as_os_str().as_bytes().as_ptr().cast(),
@@ -85,9 +91,7 @@ impl Core {
                     meta: std::ptr::null(),
                 }
             } else {
-                let buf = std::fs::read(game_path)?;
-                let (data, size) = (buf.as_ptr().cast(), buf.len());
-                lock().rom_buf = Some(buf);
+                let (data, size) = (rom.as_ptr().cast(), rom.len());
                 retro_game_info {
                     path: std::ptr::null(),
                     data,
@@ -110,9 +114,12 @@ impl Core {
                 .collect();
             let core = Core {
                 system_info,
+                id: path.file_stem().unwrap().to_string_lossy().into_owned(),
+                rom_path: game_path.to_owned(),
+                rom_sha256,
                 av_info: dbg!(av_info),
                 frame: Frame::blank(&av_info),
-                id: ID.fetch_add(1, Ordering::Relaxed),
+                instance_id: ID.fetch_add(1, Ordering::Relaxed),
                 savestate_buffer,
             };
             Ok(core)
@@ -123,11 +130,19 @@ impl Core {
         lock()
     }
 
-    pub fn run_frame(&mut self, input: &[u8], input_port: crate::tas::input::InputPort) {
+    pub fn run_frame(&mut self, input: &[u8], input_ports: &[crate::tas::input::InputPort]) {
         let run = *symbols().retro_run;
         unsafe {
-            self.lock().set_input(input, input_port);
+            let mut core = self.lock();
+            core.input = input as *const [u8];
+            core.input_ports = input_ports as *const [InputPort];
+            std::mem::drop(core);
+
             run();
+
+            let mut core = self.lock();
+            core.input = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
+            core.input_ports = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
         }
 
         std::mem::swap(&mut self.frame, &mut lock().frame);
@@ -141,13 +156,13 @@ impl Core {
                 self.savestate_buffer.len()
             ));
         }
-        SavestateBuffer::new(&self.savestate_buffer, self.id)
+        SavestateBuffer::new(&self.savestate_buffer, self.instance_id)
     }
 
     /// Restores a savestate.
     /// Returns a reference to the temporary buffer containing the decompressed state.
     pub fn restore_state(&mut self, state: SavestateRef) -> SavestateBuffer<'_> {
-        assert_eq!(state.core_id(), self.id);
+        assert_eq!(state.core_id(), self.instance_id);
         state.decompress(&mut self.savestate_buffer);
 
         unsafe {
@@ -157,13 +172,13 @@ impl Core {
             ));
         }
 
-        SavestateBuffer::new(&self.savestate_buffer, self.id)
+        SavestateBuffer::new(&self.savestate_buffer, self.instance_id)
     }
 
     /// Restores a delta savestate, given its parent savestate.
     /// Returns a reference to the temporary buffer containing the decompressed state.
     pub fn restore_delta(&mut self, state: &DeltaSavestate) -> SavestateBuffer<'_> {
-        assert_eq!(state.core_id, self.id);
+        assert_eq!(state.core_id, self.instance_id);
         state.decompress(&mut self.savestate_buffer);
 
         unsafe {
@@ -173,7 +188,7 @@ impl Core {
             ));
         }
 
-        SavestateBuffer::new(&self.savestate_buffer, self.id)
+        SavestateBuffer::new(&self.savestate_buffer, self.instance_id)
     }
 }
 impl Drop for Core {
@@ -292,15 +307,14 @@ impl CoreImpl {
         *SYMBOLS.write().unwrap() = Some(symbols);
         let result = CoreImpl {
             library,
-            rom_buf: None,
             pixel_format: PixelFormat::XRGB1555,
             frame: Frame {
                 width: 0,
                 height: 0,
                 buffer: Vec::new(),
             },
-            input: Vec::new(),
-            input_port: None,
+            input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
+            input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
         };
         ensure!(
             result.retro_api_version() == RETRO_API_VERSION,
@@ -325,12 +339,6 @@ impl CoreImpl {
 
     pub fn retro_api_version(&self) -> u32 {
         unsafe { (symbols().retro_api_version)() }
-    }
-
-    fn set_input(&mut self, input: &[u8], port: InputPort) {
-        self.input.clear();
-        self.input.extend_from_slice(input);
-        self.input_port = Some(port);
     }
 
     fn video_refresh_callback(
@@ -404,8 +412,23 @@ unsafe extern "C" fn input_poll_callback() {}
 
 unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 {
     let core = lock();
-    if port == 0 {
-        core.input_port.unwrap().read(&core.input, index, id)
+    if core.input.is_null() {
+        return 0;
+    }
+    assert!(!core.input_ports.is_null());
+
+    let input = &*core.input;
+    let input_ports = &*core.input_ports;
+    let port = port as usize;
+
+    if port < input_ports.len() {
+        let offset: usize = input_ports[0..port]
+            .iter()
+            .map(crate::tas::input::InputPort::frame_size)
+            .sum();
+        let len = input_ports[port].frame_size();
+
+        input_ports[port].read(&input[offset..(offset + len)], index, id)
     } else {
         0
     }
