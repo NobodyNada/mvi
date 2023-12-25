@@ -288,7 +288,8 @@ impl Ui {
                         .build(ui)
                 });
 
-            self.piano_roll.draw(ui, self.tas.as_mut().unwrap());
+            self.piano_roll
+                .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
         }
     }
 

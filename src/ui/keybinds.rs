@@ -50,6 +50,10 @@ impl Keybinds {
         }
     }
 
+    pub fn mode(&self) -> &Mode {
+        &self.mode
+    }
+
     pub fn key_down(
         &mut self,
         key: VirtualKeyCode,
