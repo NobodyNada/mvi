@@ -230,7 +230,7 @@ impl PianoRoll {
                     });
 
                 let (highlight, text) = match keybinds.mode() {
-                    keybinds::Mode::Normal { .. } | keybinds::Mode::Z => ([0., 1., 0.5], "NORMAL"),
+                    keybinds::Mode::Normal { .. } => ([0., 1., 0.5], "NORMAL"),
                     keybinds::Mode::Insert { .. } => ([0., 0.5, 1.], "INSERT"),
                     keybinds::Mode::Replace { .. } => ([0.75, 0., 0.25], "REPLACE"),
                 };

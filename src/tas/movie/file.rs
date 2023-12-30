@@ -132,7 +132,9 @@ impl MovieCache {
 
         self.rom_paths.insert(uuid, rom_path);
 
-        serde_json::to_writer(std::fs::File::create(Self::path())?, self)
+        let path = Self::path();
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        serde_json::to_writer(std::fs::File::create(path)?, self)
             .context("Failed to save recent movies")
     }
 }

@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum InputPort {
     Joypad(Joypad),
 }
 
 impl InputPort {
+    /// Returns an iterator over all supported input devices.
+    pub fn all() -> impl Iterator<Item = InputPort> {
+        Joypad::all().map(InputPort::Joypad)
+    }
+
     /// The number of controllers attached to this input port.
     pub fn num_controllers(&self) -> u32 {
         match self {
@@ -43,12 +48,25 @@ impl InputPort {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+impl std::fmt::Display for InputPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Joypad(j) => write!(f, "{j} joypad"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Joypad {
     Snes,
 }
 
 impl Joypad {
+    /// Returns an iterator over all support joypads.
+    pub fn all() -> impl Iterator<Item = Joypad> {
+        [Joypad::Snes].into_iter()
+    }
+
     pub fn buttons(&self) -> &'static [&'static str] {
         match self {
             Joypad::Snes => &["B", "Y", "s", "S", "↑", "↓", "←", "→", "A", "X", "L", "R"],
@@ -86,5 +104,17 @@ impl Joypad {
     pub fn default(&self, buf: &mut [u8]) {
         assert_eq!(buf.len(), self.frame_size());
         buf.fill(0)
+    }
+}
+
+impl std::fmt::Display for Joypad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Joypad::Snes => "SNES",
+            }
+        )
     }
 }

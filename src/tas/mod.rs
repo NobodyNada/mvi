@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{rc::Rc, time::Instant};
 
 use crate::core::{self, Core};
 
@@ -48,8 +48,8 @@ impl Default for RunMode {
 #[derive(Clone, Debug)]
 pub enum RecordMode {
     ReadOnly,
-    Insert(movie::Pattern),
-    Overwrite(movie::Pattern),
+    Insert(Rc<movie::Pattern>),
+    Overwrite(Rc<movie::Pattern>),
 }
 
 impl Tas {
@@ -225,7 +225,7 @@ impl Tas {
         self.run_mode = mode;
     }
 
-    pub fn set_input(&mut self, pattern: &movie::Pattern) {
+    pub fn set_input(&mut self, pattern: &Rc<movie::Pattern>) {
         let mut mode = std::mem::take(self.run_mode_mut());
         match &mut mode {
             RunMode::Paused => self
@@ -234,7 +234,7 @@ impl Tas {
             RunMode::Running {
                 stop_at: _,
                 record_mode: RecordMode::Insert(p) | RecordMode::Overwrite(p),
-            } => p.data.copy_from_slice(&pattern.data),
+            } => *p = pattern.clone(),
             _ => {}
         };
         self.set_run_mode(mode);

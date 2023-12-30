@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail, Error, Result};
 use crossbeam::atomic::AtomicCell;
 use vk::{command_buffer::PrimaryCommandBufferAbstract, sync::GpuFuture};
 use vulkano as vk;
+use winit::keyboard::NamedKey;
 
 use crate::{
     core::{self, Frame},
@@ -27,12 +28,13 @@ pub struct Ui {
 
     tokio: tokio::runtime::Runtime,
 
-    modifiers: winit::event::ModifiersState,
+    modifiers: winit::keyboard::ModifiersState,
 
     // Modal window state
     download_progress: Option<Download>,
     core_selector: Option<menu::CoreSelector>,
     hash_mismatch: Option<menu::HashMismatch>,
+    keybind_editor: Option<keybinds::KeybindEditor>,
     reported_error: Option<ReportedError>,
 }
 
@@ -96,35 +98,38 @@ pub fn run() -> Result<()> {
         Err(e) => bail!(e),
     }
 
-    let mut ui = Ui {
-        tas: None,
-        keybinds: keybinds::Keybinds::new(),
-        piano_roll: piano_roll::PianoRoll::new(),
-        framebuffer: None,
-        core_db,
-        movie_cache: tas::movie::file::MovieCache::load(),
-        tokio,
-
-        download_progress,
-        reported_error: None,
-        core_selector: None,
-        hash_mismatch: None,
-
-        modifiers: Default::default(),
-    };
-
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     backend::run(
-        |event, _imgui, _window| {
-            if let Some(e) = event.to_static() {
-                _ = event_tx.send(e);
+        || {
+            |event, _imgui, _window| {
+                _ = event_tx.send(event);
             }
         },
-        move |imgui, renderer| {
-            while let Ok(e) = event_rx.try_recv() {
-                ui.handle_event(e);
+        move || {
+            let mut ui = Ui {
+                tas: None,
+                keybinds: keybinds::Keybinds::new(),
+                piano_roll: piano_roll::PianoRoll::new(),
+                framebuffer: None,
+                core_db,
+                movie_cache: tas::movie::file::MovieCache::load(),
+                tokio,
+
+                download_progress,
+                reported_error: None,
+                core_selector: None,
+                hash_mismatch: None,
+                keybind_editor: None,
+
+                modifiers: Default::default(),
+            };
+
+            move |imgui, renderer| {
+                while let Ok(e) = event_rx.try_recv() {
+                    ui.handle_event(e);
+                }
+                ui.render(imgui, renderer);
             }
-            ui.render(imgui, renderer);
         },
     )
 }
@@ -290,6 +295,22 @@ impl Ui {
             }
         }
 
+        if let Some(editor) = self.keybind_editor.as_mut() {
+            const ID: &str = "Keybind Editor";
+            Ui::set_popup_position(ui);
+            Ui::set_popup_size(ui, ui.window_size());
+            if let Some(_token) = ui.begin_modal_popup(ID) {
+                if let Some(save) = editor.draw(ui, self.modifiers) {
+                    let editor = self.keybind_editor.take().unwrap();
+                    if save {
+                        self.handle_error(|ui| editor.apply(&mut ui.keybinds));
+                    }
+                }
+            } else {
+                ui.open_popup(ID);
+            }
+        }
+
         if self.tas.is_some() {
             ui.window("Game View")
                 .size([512., 448.], imgui::Condition::FirstUseEver)
@@ -321,35 +342,56 @@ impl Ui {
         }
     }
 
-    fn handle_event(&mut self, event: winit::event::Event<'_, ()>) {
-        let Some(tas) = &mut self.tas else { return };
+    fn handle_event(&mut self, event: winit::event::Event<()>) {
         match event {
             winit::event::Event::WindowEvent {
                 window_id: _,
                 event: e,
             } => match e {
-                winit::event::WindowEvent::ReceivedCharacter(c) => {
-                    self.keybinds.input_char(c, tas, &mut self.piano_roll)
-                }
-                winit::event::WindowEvent::ModifiersChanged(m) => self.modifiers = m,
+                winit::event::WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
                 winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
+                    event:
+                        winit::event::KeyEvent {
                             state,
-                            virtual_keycode: Some(key),
+                            logical_key: key,
                             ..
                         },
                     ..
-                } => match state {
-                    winit::event::ElementState::Pressed => {
-                        self.keybinds
-                            .key_down(key, self.modifiers, tas, &mut self.piano_roll)
+                } => {
+                    if let winit::keyboard::Key::Named(
+                        NamedKey::Control | NamedKey::Shift | NamedKey::Super | NamedKey::Alt,
+                    ) = key
+                    {
+                        // These are handled by ModifiersChanged
+                        return;
                     }
-                    winit::event::ElementState::Released => {
-                        self.keybinds
-                            .key_up(key, self.modifiers, tas, &mut self.piano_roll)
+                    match state {
+                        winit::event::ElementState::Pressed => {
+                            if let Some(editor) = self.keybind_editor.as_mut() {
+                                editor.key_down(key, self.modifiers);
+                            } else if let Some(tas) = &mut self.tas {
+                                self.keybinds.key_down(
+                                    key,
+                                    self.modifiers,
+                                    tas,
+                                    &mut self.piano_roll,
+                                )
+                            }
+                        }
+                        winit::event::ElementState::Released => {
+                            if self.keybind_editor.is_none() {
+                                if let Some(tas) = &mut self.tas {
+                                    self.keybinds.key_up(
+                                        key,
+                                        self.modifiers,
+                                        tas,
+                                        &mut self.piano_roll,
+                                    )
+                                }
+                            }
+                        }
                     }
-                },
+                }
                 _ => {}
             },
             _ => {}
@@ -364,14 +406,14 @@ impl Ui {
         unsafe {
             imgui::sys::igSetNextWindowPos(
                 window_center.into(),
-                imgui::Condition::Appearing as i32,
+                imgui::Condition::Always as i32,
                 [0.5, 0.5].into(),
             );
         }
     }
 
     fn set_popup_size(_ui: &imgui::Ui, size: [f32; 2]) {
-        unsafe { imgui::sys::igSetNextWindowSize(size.into(), imgui::Condition::Appearing as i32) }
+        unsafe { imgui::sys::igSetNextWindowSize(size.into(), imgui::Condition::Always as i32) }
     }
 
     fn run_frame(&mut self, renderer: &mut Renderer) -> Option<(&Frame, &mut Framebuffer)> {

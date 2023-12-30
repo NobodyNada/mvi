@@ -89,6 +89,11 @@ impl Ui {
                     }
                 });
             });
+            ui.menu("Config", || {
+                if ui.menu_item("Keybinds...") {
+                    self.keybind_editor = Some(keybinds::KeybindEditor::new(&mut self.keybinds));
+                }
+            })
         });
     }
 
@@ -171,13 +176,13 @@ impl Ui {
         const ID: &str = "Select Core";
         Ui::set_popup_position(ui);
         Ui::set_popup_size(ui, ui.window_size());
-        if let Some(_) = ui.begin_modal_popup(ID) {
-            if let Some(_) = ui
+        if let Some(_token) = ui.begin_modal_popup(ID) {
+            if let Some(_token) = ui
                 .child_window("core_list")
                 .size([0., -ui.text_line_height_with_spacing() * 4.])
                 .begin()
             {
-                if let Some(_) = ui.begin_table(
+                if let Some(_token) = ui.begin_table(
                     "Available cores",
                     2 + core_selector.show_experimental as usize
                         + core_selector.show_non_matching as usize,

@@ -93,7 +93,7 @@ pub struct Progress {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl CoreDb {
-    const URL: &str = "https://buildbot.libretro.com/assets/frontend/info.zip";
+    const URL: &'static str = "https://buildbot.libretro.com/assets/frontend/info.zip";
 
     /// Returns the cores in the database.
     pub fn cores(&self) -> &[CoreInfo] {
