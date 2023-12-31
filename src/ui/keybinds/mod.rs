@@ -18,16 +18,27 @@ mod editor;
 
 pub use editor::KeybindEditor;
 
+/// The current keybind-processing state.
 #[derive(Debug)]
 pub struct Keybinds {
+    /// The current mode (normal, insert, etc.)
     mode: Mode,
 
+    /// All bindings mapping a key to a controller input.
+    ///     controller_bindings[port_index][port_type][key] = button_index
     controller_bindings: Vec<HashMap<tas::input::InputPort, HashMap<Key, u32>>>,
+
+    /// Keybindings that apply in all modes.
     global_bindings: InputTrie,
+
+    /// Keybindings that apply only in normal mode.
     normal_bindings: InputTrie,
+
+    /// Keybindings that apply only in insert or replace mode.
     insert_bindings: InputTrie,
 }
 
+/// The current editor mode.
 #[derive(Debug)]
 pub enum Mode {
     Normal { count: u32 },
@@ -35,34 +46,58 @@ pub enum Mode {
     Replace(Rc<Pattern>),
 }
 
+/// The keybind configuration in a form convenient for editing and serializing.
+///
+/// For processing keybinds, it's convenient to represent them as mappings from key to action.
+/// However, for editing, saving, and loading keybinds, we represent them as mappings from action
+/// to key.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct KeybindConfiguration {
+    /// The controller bindings.
+    ///     controller_bindings[port_index][port_type][button_index] = key
     #[serde(with = "serialize_controller_bindings")]
     controller_bindings: Vec<BTreeMap<tas::input::InputPort, Vec<Option<Key>>>>,
+
+    /// The bindings that apply in all modes.
+    ///     global_bindings[action] = [binding1, binding2, binding3, ...]
+    /// where each binding is [(key1, mods1), (key2, mods2), ...]
     global_bindings: BTreeMap<String, Vec<Vec<(Key, ModifiersState)>>>,
     normal_bindings: BTreeMap<String, Vec<Vec<(Key, ModifiersState)>>>,
     insert_bindings: BTreeMap<String, Vec<Vec<(Key, ModifiersState)>>>,
 }
 
+/// Context needed by keybind callbacks.
 struct Context<'a> {
     keybinds: &'a mut Keybinds,
     tas: &'a mut Tas,
     piano_roll: &'a mut PianoRoll,
 }
 
+/// Keybinds are represented using a trie: https://en.wikipedia.org/wiki/Trie
+/// Each node of the trie is either a branch node with edges corresponding to keypresses that lead
+/// to child nodes, or a leaf node corresponding to an action. A sequence of keypresses is
+/// interpereted by walking the trie by following edges corresponding to pressed keys until
+/// reaching an action.
 #[derive(Debug)]
 struct InputTrie {
+    /// The root node of the trie.
     root: Rc<RefCell<InputNode>>,
+
+    /// The position of the currently buffered sequence of keys, or None if the pressed keys do not
+    /// lead to any existing actions.
     current: Option<Rc<RefCell<InputNode>>>,
 }
 
 enum InputNode {
+    /// This is a terminal node corresponding to an action.
     Action(Rc<RefCell<dyn FnMut(Context)>>),
+    /// This is a branch node, with children for each possible keypress.
     Branch(HashMap<Key, SmallVec<[(ModifiersState, Rc<RefCell<InputNode>>); 3]>>),
 }
 
 static CONFIG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 impl Keybinds {
+    /// Creates the keybinds, loading the user's configuration from disk.
     pub fn new() -> Keybinds {
         let mut kb = Self {
             mode: Mode::Normal { count: 0 },
@@ -75,6 +110,7 @@ impl Keybinds {
         kb
     }
 
+    /// The path to the keybind configuration file.
     fn config_path() -> &'static std::path::Path {
         CONFIG_PATH.get_or_init(|| {
             let mut path = dirs::config_dir().unwrap();
@@ -84,6 +120,8 @@ impl Keybinds {
         })
     }
 
+    /// Loads the keybind configuration from disk. The configuration is applied, missing entries
+    /// are populated with their default values, and the resulting configuration is returned.
     fn load_config(&mut self) -> KeybindConfiguration {
         let path = Self::config_path();
         let mut config = KeybindConfiguration::default();
@@ -97,6 +135,7 @@ impl Keybinds {
         config
     }
 
+    /// Saves the given keybind configuration to disk.
     fn save_config(config: &KeybindConfiguration) -> anyhow::Result<()> {
         let path = Self::config_path();
         std::fs::create_dir_all(path.parent().unwrap())?;
@@ -106,10 +145,12 @@ impl Keybinds {
         Ok(())
     }
 
+    /// Returns the current editor mode.
     pub fn mode(&self) -> &Mode {
         &self.mode
     }
 
+    /// Returns the controller (port, index, button) corresponding to the given keypress.
     fn get_input_binding(
         &self,
         input_ports: &[tas::input::InputPort],
@@ -128,6 +169,7 @@ impl Keybinds {
             })
     }
 
+    /// Handles a keyboard input.
     pub fn key_down(
         &mut self,
         key: Key,
@@ -158,6 +200,7 @@ impl Keybinds {
             }
         }
 
+        // Walk a step in the active tries according to the pressed key.
         let global = self.global_bindings.process(&key, modifiers);
         let modal = match self.mode {
             Mode::Normal { .. } => self.normal_bindings.process(&key, modifiers),
@@ -166,6 +209,7 @@ impl Keybinds {
             }
         };
 
+        // Did any actions match?
         match (&mut self.mode, input, modal, global) {
             // In insert mode, controller bindings get priority over all else
             (Mode::Insert(pattern) | Mode::Replace(pattern), Some((port, index, id)), _, _) => {
@@ -193,9 +237,10 @@ impl Keybinds {
             Mode::Normal { .. } => &mut self.normal_bindings,
             Mode::Insert(..) | Mode::Replace(..) => &mut self.insert_bindings,
         };
+        // If nothing matches at all, reset all the tries.
         if self.global_bindings.current.is_none() && modal_bindings.current.is_none() {
-            // If nothing matched, and a numeric key was pressed in normal mode,
-            // reset bindings and set the count.
+            // If a numeric key was pressed in normal mode, and it was not mapped to anything else,
+            // set the count.
             if let (Mode::Normal { .. }, Some(digit)) = (&self.mode, digit) {
                 self.reset_bindings();
                 self.mode = Mode::Normal { count: digit };
@@ -206,6 +251,7 @@ impl Keybinds {
         }
     }
 
+    /// Handles a key release input.
     pub fn key_up(
         &mut self,
         key: Key,
@@ -224,6 +270,7 @@ impl Keybinds {
         }
     }
 
+    /// Resets the state, clearing any pending keys and switching to normal mode.
     pub fn reset(&mut self) {
         self.mode = Mode::Normal { count: 0 };
         self.reset_bindings();
@@ -231,6 +278,7 @@ impl Keybinds {
 
     fn normalize(key: Key) -> Key {
         match key {
+            // Convert uppercase keys to lowercase -- we'll check for Shift directly.
             Key::Character(c) => Key::Character(c.to_lowercase().into()),
             k => k,
         }
@@ -245,7 +293,7 @@ impl Keybinds {
         }
     }
 
-    pub fn toggle_playback(&mut self, tas: &mut Tas) {
+    fn toggle_playback(&mut self, tas: &mut Tas) {
         let mode = match tas.run_mode() {
             tas::RunMode::Running {
                 stop_at: _,
@@ -301,6 +349,7 @@ impl Keybinds {
 }
 
 impl InputTrie {
+    /// Creates an empty InputTrie.
     fn new() -> InputTrie {
         let root = Rc::new(RefCell::new(InputNode::Branch(HashMap::new())));
         InputTrie {
@@ -308,6 +357,8 @@ impl InputTrie {
             root,
         }
     }
+
+    /// Adds a binding to this trie.
     fn add(
         &mut self,
         binding: &[(Key, ModifiersState)],
@@ -316,10 +367,12 @@ impl InputTrie {
         self.root.borrow_mut().add(binding, action)
     }
 
+    /// Resets the current state of the trie (clearing any pending keys).
     fn reset(&mut self) {
         self.current = Some(self.root.clone())
     }
 
+    /// Advances the trie's current state according to the given keypress.
     fn process(
         &mut self,
         key: &Key,
@@ -350,15 +403,21 @@ impl std::fmt::Debug for InputNode {
 }
 
 impl InputNode {
+    /// Adds a binding to the trie. Returns true if successful,
+    /// or false in case of conflict.
     fn add(
         &mut self,
         binding: &[(Key, ModifiersState)],
         action: Rc<RefCell<dyn FnMut(Context)>>,
     ) -> bool {
         match self {
+            // If this node is an action, we have a conflict.
             Self::Action(_) => false,
             Self::Branch(mappings) => {
+                // This node is a branch. Try to add the binding to this branch.
                 let Some((key, mods)) = binding.first() else {
+                    // If we're trying to add an action here, and this is a branch,
+                    // we have a conflict.
                     return false;
                 };
                 let remainder = &binding[1..];
@@ -366,15 +425,24 @@ impl InputNode {
                 let mappings = mappings.entry(key.clone()).or_default();
                 if let Some(conflict) = mappings.iter_mut().find(|(m, _)| m == mods) {
                     if remainder.is_empty() {
+                        // We already have something mapped to this key, and we're trying to put an
+                        // action here -- we have a conflict.
                         false
                     } else {
+                        // We have something mapped to this key, but it's a branch and this key is
+                        // not the end of the sequence. Recursively add the remainder of the
+                        // sequence to the new branch.
                         conflict.1.borrow_mut().add(remainder, action)
                     }
                 } else {
                     if remainder.is_empty() {
+                        // We have an action, and there is no conflict.
                         mappings.push((*mods, Rc::new(RefCell::new(InputNode::Action(action)))));
                         true
                     } else {
+                        // There is nothing here in the tree already, but we have more keys to
+                        // process. Recursively create a series of branches leading to the action,
+                        // and put it in the tree here.
                         let mut node = InputNode::Branch(HashMap::new());
                         assert!(node.add(remainder, action));
                         mappings.push((*mods, Rc::new(RefCell::new(node))));
@@ -385,6 +453,7 @@ impl InputNode {
         }
     }
 
+    /// If this node is a branch, returns the child node corresponding to the given keypress.
     fn process(&self, key: &Key, modifiers: ModifiersState) -> Option<Rc<RefCell<InputNode>>> {
         match self {
             Self::Action(_) => None,

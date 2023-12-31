@@ -12,17 +12,36 @@ use rubato::Resampler;
 
 use crate::core;
 
+/// The interface from the emulator to the audio system: you write audio samples here; we'll
+/// resample, buffer, and play them.
 pub struct AudioWriter {
+    /// The ring buffer storing samples to be played back.
+    /// This buffer stores samples formatted for the host system: a sequence of frames, at the host
+    /// sample rate, with the host's preferred number of channels per frame.
     buffer: Arc<RingBuffer<f32>>,
+
+    /// Resamples audio from the libretro guest's sample rate to the host sample rate.
     resampler: rubato::SincFixedOut<f32>,
+
+    /// A buffer of samples waiting to be resampled.
+    /// The resampler accepts audio in chunks; once we have enough samples in the buffer, we can
+    /// send them to the resampler.
     resampler_input_buffer: [Vec<f32>; 2],
+
+    /// A scratch buffer for the resampler to store its output.
     resampler_output_buffer: [Vec<f32>; 2],
+
+    /// The number of output channels on the host device.
     output_channels: usize,
+
+    /// A handle to the cpal audio stream. Once this is dropped, the stream is stopped.
     _stream: cpal::Stream,
 }
 
 impl AudioWriter {
+    /// Creates an AudioWriter given the sample rate of the libretro guest.
     pub fn new(input_sample_rate: usize) -> anyhow::Result<AudioWriter> {
+        // Get the audio device.
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -30,17 +49,20 @@ impl AudioWriter {
 
         let config = device.default_output_config()?;
         let output_sample_rate = config.sample_rate().0 as usize;
+        let output_channels = config.channels() as usize;
+
         // 3 frames at 60fps seems like a reasonable buffer size
         let bufsize = output_sample_rate / 20;
 
-        let device_bufsize = bufsize / 2;
+        // Default to a third of that (~one frame) for the system's audio buffer size
+        let device_bufsize = bufsize / 3;
         let device_bufsize = match config.buffer_size() {
             cpal::SupportedBufferSize::Range { min, max } => {
+                // But if that's not compatible, clamp it to the system's supported range
                 device_bufsize.clamp(*min as usize, *max as usize)
             }
             cpal::SupportedBufferSize::Unknown => device_bufsize,
         };
-        let output_channels = config.channels() as usize;
 
         let buffer = Arc::new(RingBuffer::new(bufsize * output_channels));
 
@@ -48,14 +70,17 @@ impl AudioWriter {
         config.buffer_size = cpal::BufferSize::Fixed(device_bufsize as u32);
         let stream = device.build_output_stream(
             &config,
-            Self::callback(Arc::downgrade(&buffer), output_sample_rate),
+            Self::callback(Arc::downgrade(&buffer), output_sample_rate, output_channels),
             |e| println!("Audio playback error: {e:?}"),
             None,
         )?;
 
+        // Create a resampler to convert from the guest sample rate to the host sample rate.
         let resampler = rubato::SincFixedOut::new(
             output_sample_rate as f64 / input_sample_rate as f64,
             1.,
+            // Use recommended paramters from rubato documentation:
+            // https://docs.rs/rubato/latest/rubato/struct.SincInterpolationParameters.html
             rubato::SincInterpolationParameters {
                 sinc_len: 256,
                 f_cutoff: 0.95,
@@ -77,8 +102,10 @@ impl AudioWriter {
         })
     }
 
+    /// Writes samples to the audio device.
     pub fn write(&mut self, mut samples: &[core::AudioFrame]) {
         unsafe {
+            // Get the available buffer space.
             let write_buf = self.buffer.write_buffer();
             let mut write_buf = write_buf
                 .0
@@ -87,7 +114,9 @@ impl AudioWriter {
                 .peekable();
             let mut samples_written = 0;
 
+            // As long as we have more samples to process and we have more space in our buffer...
             while !samples.is_empty() && write_buf.peek().is_some() {
+                // Put samples into the resampler input buffer.
                 while self.resampler_input_buffer[0].len() < self.resampler.input_frames_next()
                     && !samples.is_empty()
                 {
@@ -97,6 +126,8 @@ impl AudioWriter {
                         .push((samples[0].r as f32) / (i16::MAX as f32 + 1.));
                     samples = &samples[1..];
                 }
+
+                // If it's full, resample a batch of samples.
                 if self.resampler_input_buffer[0].len() == self.resampler.input_frames_next() {
                     let output_len = self.resampler.output_frames_next();
                     self.resampler_output_buffer[0].resize(output_len, 0.);
@@ -118,10 +149,12 @@ impl AudioWriter {
                     .zip(self.resampler_output_buffer[1].iter());
                 for ((l, r), out) in interleaved_samples.zip(&mut write_buf) {
                     if self.output_channels == 1 {
+                        // If the output is mono, downmix the samples.
                         out[0] = MaybeUninit::new((l + r) / 2.);
                     } else {
                         out[0] = MaybeUninit::new(*l);
                         out[1] = MaybeUninit::new(*r);
+                        // If the output has more than 2 channels, just use the first 2.
                         out[2..].fill(MaybeUninit::new(0.));
                     }
                     samples_written += self.output_channels;
@@ -134,17 +167,29 @@ impl AudioWriter {
         }
     }
 
+    // Generates a callback function that is invoked when the system requests audio samples.
     fn callback(
         buffer: Weak<RingBuffer<f32>>,
         output_sample_rate: usize,
+        output_channels: usize,
     ) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
+        // The emulator will not always generate samples: it might lag behind sometimes, and it
+        // doesn't generate samples at all when paused. This causes audible pops whenever playback
+        // stops and starts as the output level jumps between 0 and whatever the emulator's output
+        // level is. To mitigate that, we apply gradually ramp up the output level when playback starts
+        // and ramp-down when it stops.
+
+        // If true, we aren't currently playing anything and should apply a ramp-up when we start.
         let mut muted = true;
         move |out_buf, _info| {
+            // The number of samples we've written to the output stream.
             let mut samples_written = 0;
+            // Does the ring buffer still exist? (It might not if the audio writer was destroyed.)
             if let Some(buffer) = buffer.upgrade() {
                 unsafe {
                     let read_buffer = buffer.read_buffer();
                     for slice in [read_buffer.0, read_buffer.1] {
+                        // Copy some samples to the output stream.
                         let samples_to_write = (out_buf.len() - samples_written).min(slice.len());
                         out_buf[samples_written..][..samples_to_write]
                             .copy_from_slice(std::mem::transmute(&slice[0..samples_to_write]));
@@ -153,25 +198,33 @@ impl AudioWriter {
 
                     let ramp_len = output_sample_rate / 1000;
                     if muted && samples_written != 0 {
+                        // We were muted, but now we're playing some audio. Apply a ramp-up so it
+                        // doesn't pop.
                         let ramp_region = &mut out_buf[0..(ramp_len * 2).min(samples_written)];
-                        for (frame, ramp_index) in ramp_region.chunks_exact_mut(2).zip(0..ramp_len)
+                        for (frame, ramp_index) in ramp_region
+                            .chunks_exact_mut(output_channels)
+                            .zip(0..ramp_len)
                         {
                             let ramp = ramp_index as f32 / ramp_len as f32;
                             frame[0] *= ramp;
-                            frame[1] *= ramp;
+                            frame.get_mut(1).map(|s| *s *= ramp);
                         }
                     }
                     if samples_written == out_buf.len() {
                         muted = false;
                     } else {
+                        // There's not enough samples to fill the buffer, so apply a ramp-down and
+                        // set the muted flag.
                         muted = true;
                         let ramp_region = &mut out_buf
                             [samples_written.saturating_sub(ramp_len * 2)..samples_written];
-                        for (frame, ramp_index) in ramp_region.chunks_exact_mut(2).zip(0..ramp_len)
+                        for (frame, ramp_index) in ramp_region
+                            .chunks_exact_mut(output_channels)
+                            .zip(0..ramp_len)
                         {
                             let ramp = (ramp_len - ramp_index) as f32 / ramp_len as f32;
                             frame[0] *= ramp;
-                            frame[1] *= ramp;
+                            frame.get_mut(1).map(|s| *s *= ramp);
                         }
                     }
                     buffer.commit_read(samples_written);
@@ -182,8 +235,11 @@ impl AudioWriter {
     }
 }
 
+/// A lock-free ring buffer for queueing audio samples.
 struct RingBuffer<T> {
+    /// A pointer to the start of the buffer, of length 'capacity'.
     data: *mut T,
+    /// The size of the buffer in elements.
     capacity: usize,
     /// The index of the next value to be read from the buffer, mod 2*capacity.
     reader: AtomicUsize,
@@ -196,6 +252,7 @@ unsafe impl<T> Sync for RingBuffer<T> {}
 unsafe impl<T: Send> Send for RingBuffer<T> {}
 
 impl<T> RingBuffer<T> {
+    /// Creates a new ring buffer.
     fn new(capacity: usize) -> RingBuffer<T> {
         assert_ne!(capacity, 0);
         unsafe {

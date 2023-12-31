@@ -27,11 +27,14 @@ enum RecordTarget {
 }
 
 impl KeybindEditor {
+    /// Initializes the keybind editor.
     pub fn new(bindings: &mut Keybinds) -> Self {
+        // Load an empty keybinding configuration to populate the defaults.
         let mut default_bindings = Default::default();
         bindings.register_keybinds(&mut default_bindings);
         KeybindEditor {
             default: default_bindings,
+            // Reload the real keybinding configuration.
             config: bindings.load_config(),
             recorded_keys: Vec::new(),
             recording: None,
@@ -39,41 +42,56 @@ impl KeybindEditor {
         }
     }
 
+    /// Saves the changes made in the keybind editor.
     pub fn apply(mut self, bindings: &mut Keybinds) -> anyhow::Result<()> {
         bindings.register_keybinds(&mut self.config);
         Keybinds::save_config(&self.config).context("Could not save keybinds to disk")
     }
 
+    // Handles user keypresses while the editor is open.
     pub fn key_down(&mut self, key: Key, modifiers: ModifiersState) {
+        // Are we recording?
         match self.recording {
+            // Yes, we're recording a controller input. Controller inputs currently don't support
+            // sequences, so just replace the binding.
             Some(RecordTarget::Controller { .. }) => self.recorded_keys = vec![(key, modifiers)],
+
+            // Yes, we're recording an action. Add the new keypress to the action's sequence.
             Some(_) => self.recorded_keys.push((key, modifiers)),
+
+            // No, do nothing.
             _ => {}
         }
     }
 
+    /// Renders the keybind editor.
     pub fn draw(&mut self, ui: &imgui::Ui, modifiers: ModifiersState) -> Option<bool> {
+        // If we're recording, draw the recording modal.
         if let Some(target) = &self.recording {
-            let name = match target {
-                RecordTarget::Global(s) | RecordTarget::Normal(s) | RecordTarget::Insert(s) => {
-                    std::borrow::Cow::Borrowed(s)
-                }
-                RecordTarget::Controller {
-                    port: _,
-                    device,
-                    index,
-                } => {
-                    let tas::input::InputPort::Joypad(joypad) = device;
-                    std::borrow::Cow::Owned(format!("{device} {}", joypad.buttons()[*index]))
-                }
-            };
             const ID: &str = "Record Keybind";
             ui::Ui::set_popup_size(ui, [300., 100.]);
             if let Some(_token) = ui.begin_modal_popup(&ID) {
-                ui.text(format!("Enter keybind for '{name}':"));
+                match target {
+                    // What's the name of the thing we're recording?
+                    RecordTarget::Global(s) | RecordTarget::Normal(s) | RecordTarget::Insert(s) => {
+                        ui.text(format!("Enter keybind for '{s}'"));
+                    }
+                    RecordTarget::Controller {
+                        port: _,
+                        device,
+                        index,
+                    } => {
+                        let tas::input::InputPort::Joypad(joypad) = device;
+                        ui.text(format!(
+                            "Enter keybind for '{device} {}'",
+                            joypad.buttons()[*index]
+                        ))
+                    }
+                };
                 Self::draw_binding(ui, &self.recorded_keys);
 
                 if ui.button("Save") {
+                    // Write the keybind to the target.
                     let mut apply = |target: &mut Vec<_>| {
                         if self.append {
                             target.push(std::mem::take(&mut self.recorded_keys));
@@ -126,6 +144,7 @@ impl KeybindEditor {
             .size([0., -ui.text_line_height_with_spacing() * 6.])
             .begin()
         {
+            // Draw the controller binding table.
             if ui.collapsing_header("Controllers", imgui::TreeNodeFlags::FRAMED) {
                 for (port_index, port) in self.config.controller_bindings.iter_mut().enumerate() {
                     for (device, buttons) in port {
@@ -176,6 +195,7 @@ impl KeybindEditor {
                 }
             }
 
+            // Draw each of the action binding tables.
             for (label, bindings, default, record_target) in [
                 (
                     "Global bindings",

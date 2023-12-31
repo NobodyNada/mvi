@@ -3,6 +3,8 @@ use super::*;
 use crate::ui::piano_roll;
 
 impl Keybinds {
+    /// Applies the given keybind configuration, populating any missing entries with their default
+    /// values.
     pub(super) fn register_keybinds(&mut self, config: &mut KeybindConfiguration) {
         self.global_bindings = InputTrie::new();
         self.normal_bindings = InputTrie::new();
@@ -35,6 +37,12 @@ impl Keybinds {
                 _ => unreachable!(),
             },
         ));
+
+        // Registers key sequences to trigger the given action.
+        // `into`: The mode to register the action into.
+        // `label`: The name of the action.
+        // `default`: The key sequence to be used if none is specified.
+        // `action`: A callback to run when the keybind is triggered.
         fn register_multiple<ModeState>(
             into: &RefCell<(
                 &mut BTreeMap<String, Vec<Vec<(Key, ModifiersState)>>>,
@@ -58,6 +66,8 @@ impl Keybinds {
                 into.1.add(binding, handler.clone());
             }
         }
+        // Convenience function for registering key sequences where the default is a single key
+        // sequence rather than a list.
         fn register<ModeState>(
             into: &RefCell<(
                 &mut BTreeMap<String, Vec<Vec<(Key, ModifiersState)>>>,
@@ -70,9 +80,11 @@ impl Keybinds {
         ) {
             register_multiple(into, label, vec![default], action)
         }
+        // Convenience function for converting a character to a key.
         fn c(c: char) -> Key {
             Key::Character(winit::keyboard::SmolStr::new(c.encode_utf8(&mut [0; 4])))
         }
+        // Convenience function for converting a character to a key.
         fn s(s: &str) -> Vec<(Key, ModifiersState)> {
             s.chars()
                 .map(|c_| (c(c_), ModifiersState::empty()))
@@ -213,6 +225,7 @@ impl Keybinds {
                 .set_scroll_lock(piano_roll::ScrollLock::Bottom)
         });
 
+        // Initialize controller bindings.
         if config.controller_bindings.is_empty() {
             const DEFAULT_CONTROLLER_LAYOUT: &str = "aqwpkjhldfer";
             config.controller_bindings = vec![[(
