@@ -289,10 +289,12 @@ impl Tas {
     }
 
     pub fn seek_to(&mut self, frame: u32) {
-        self.playback_cursor = frame;
-        let (f, state) = self.movie.greenzone.restore(frame);
-        self.next_emulator_frame = f;
-        self.core.restore_state(state);
+        if self.playback_cursor != frame {
+            self.playback_cursor = frame;
+            let (f, state) = self.movie.greenzone.restore(frame);
+            self.next_emulator_frame = f;
+            self.core.restore_state(state);
+        }
     }
 
     pub fn select_next(&mut self, n: u32) {
