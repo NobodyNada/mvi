@@ -43,6 +43,7 @@ pub struct CoreImpl {
     frame: Frame,
     input: *const [u8],
     input_ports: *const [InputPort],
+    audio_callback: Option<*mut dyn FnMut(&[AudioFrame])>,
 }
 
 // The input_callback cannot be safely sent across threads, but we are careful to never do so.
@@ -66,6 +67,13 @@ impl Frame {
                 .collect(),
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AudioFrame {
+    pub l: i16,
+    pub r: i16,
 }
 
 static CORE: Mutex<Option<CoreImpl>> = Mutex::new(None);
@@ -130,12 +138,18 @@ impl Core {
         lock()
     }
 
-    pub fn run_frame(&mut self, input: &[u8], input_ports: &[crate::tas::input::InputPort]) {
+    pub fn run_frame(
+        &mut self,
+        input: &[u8],
+        input_ports: &[crate::tas::input::InputPort],
+        mut audio_callback: impl FnMut(&[AudioFrame]),
+    ) {
         let run = *symbols().retro_run;
         unsafe {
             let mut core = self.lock();
             core.input = input as *const [u8];
             core.input_ports = input_ports as *const [InputPort];
+            core.audio_callback = Some(std::ptr::addr_of_mut!(audio_callback) as *mut _);
             std::mem::drop(core);
 
             run();
@@ -143,6 +157,7 @@ impl Core {
             let mut core = self.lock();
             core.input = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
             core.input_ports = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
+            core.audio_callback = None;
         }
 
         std::mem::swap(&mut self.frame, &mut lock().frame);
@@ -315,6 +330,7 @@ impl CoreImpl {
             },
             input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
             input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
+            audio_callback: None,
         };
         ensure!(
             result.retro_api_version() == RETRO_API_VERSION,
@@ -367,7 +383,11 @@ impl CoreImpl {
         }
     }
 
-    fn audio_callback(&mut self, _data: &[AudioFrame]) {}
+    fn audio_callback(&mut self, data: &[AudioFrame]) {
+        unsafe {
+            self.audio_callback.map(|cb| (*cb)(data));
+        }
+    }
 
     fn set_pixel_format(&mut self, format: retro_pixel_format) -> bool {
         let Ok(pixel_format) = PixelFormat::try_from(format) else {
@@ -432,11 +452,4 @@ unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, i
     } else {
         0
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct AudioFrame {
-    l: i16,
-    r: i16,
 }

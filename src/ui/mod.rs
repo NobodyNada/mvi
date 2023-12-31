@@ -11,7 +11,9 @@ use crate::{
     tas::{self, Tas},
 };
 
-use self::backend::render::Renderer;
+use self::{audio::AudioWriter, backend::render::Renderer};
+
+mod audio;
 mod backend;
 mod keybinds;
 mod menu;
@@ -22,6 +24,7 @@ pub struct Ui {
     keybinds: keybinds::Keybinds,
     piano_roll: piano_roll::PianoRoll,
     framebuffer: Option<Framebuffer>,
+    audio: Option<AudioWriter>,
 
     core_db: Option<core::info::CoreDb>,
     movie_cache: tas::movie::file::MovieCache,
@@ -111,6 +114,7 @@ pub fn run() -> Result<()> {
                 keybinds: keybinds::Keybinds::new(),
                 piano_roll: piano_roll::PianoRoll::new(),
                 framebuffer: None,
+                audio: None,
                 core_db,
                 movie_cache: tas::movie::file::MovieCache::load(),
                 tokio,
@@ -416,10 +420,29 @@ impl Ui {
         unsafe { imgui::sys::igSetNextWindowSize(size.into(), imgui::Condition::Always as i32) }
     }
 
+    fn load_game<F: FnOnce(core::Core) -> Result<Tas>>(
+        &mut self,
+        core_path: &std::path::Path,
+        game_path: &std::path::Path,
+        tas: F,
+    ) -> Result<()> {
+        self.keybinds.reset();
+        self.tas = None;
+        self.framebuffer = None;
+        let core = unsafe { core::Core::load(&core_path, &game_path)? };
+        self.audio = Some(AudioWriter::new(core.av_info.timing.sample_rate as usize)?);
+        self.tas = Some(tas(core)?);
+        Ok(())
+    }
+
     fn run_frame(&mut self, renderer: &mut Renderer) -> Option<(&Frame, &mut Framebuffer)> {
         let tas = self.tas.as_mut()?;
         let av = tas.av_info();
-        let frame = tas.run_host_frame();
+        let frame = tas.run_host_frame(|samples| {
+            if let Some(writer) = self.audio.as_mut() {
+                writer.write(samples);
+            }
+        });
 
         // Create the framebuffer, if it does not already exist
         let framebuffer = self.framebuffer.get_or_insert_with(|| {

@@ -224,6 +224,11 @@ impl Keybinds {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.mode = Mode::Normal { count: 0 };
+        self.reset_bindings();
+    }
+
     fn normalize(key: Key) -> Key {
         match key {
             Key::Character(c) => Key::Character(c.to_lowercase().into()),

@@ -126,13 +126,17 @@ impl Tas {
         self.movie.movie_path = path;
     }
 
-    pub fn run_guest_frame(&mut self) -> &core::Frame {
+    pub fn run_guest_frame(
+        &mut self,
+        audio_callback: &mut impl FnMut(&[core::AudioFrame]),
+    ) -> &core::Frame {
         let frame = if self.next_emulator_frame < self.movie.len() {
             self.movie.frame(self.next_emulator_frame)
         } else {
             self.movie.default_frame()
         };
-        self.core.run_frame(frame, &self.movie.input_ports);
+        self.core
+            .run_frame(frame, &self.movie.input_ports, audio_callback);
         self.next_emulator_frame += 1;
         self.movie
             .greenzone
@@ -147,7 +151,10 @@ impl Tas {
         &self.core.frame
     }
 
-    pub fn run_host_frame(&mut self) -> &core::Frame {
+    pub fn run_host_frame(
+        &mut self,
+        mut audio_callback: impl FnMut(&[core::AudioFrame]),
+    ) -> &core::Frame {
         // Determine how many guest frames have elapsed since the last host frame
         let time = Instant::now();
         let host_frame_duration = time - self.last_host_frame;
@@ -160,7 +167,7 @@ impl Tas {
 
         // If we're behind where playback should be, seek to catch up
         while self.playback_cursor >= self.next_emulator_frame && self.core_frame_fraction >= 1. {
-            self.run_guest_frame();
+            self.run_guest_frame(&mut audio_callback);
             self.core_frame_fraction -= 1.;
         }
 
@@ -199,7 +206,7 @@ impl Tas {
                     }
                     assert!(self.next_emulator_frame == self.playback_cursor + 1);
 
-                    self.run_guest_frame();
+                    self.run_guest_frame(&mut audio_callback);
                     self.core_frame_fraction -= 1.;
                 }
 

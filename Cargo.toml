@@ -10,6 +10,7 @@ anyhow = { version = "1.0.72", features = ["backtrace"] }
 bytemuck = { version = "1.14.0", features = ["derive"] }
 cfg-if = "1.0.0"
 ciborium = "0.2.1"
+cpal = "0.15.2"
 crossbeam = "0.8.2"
 dirs = "5.0.1"
 flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] }
@@ -22,6 +23,7 @@ libloading = "0.8.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
 reqwest = "0.11.23"
 rfd = { git = "https://github.com/NobodyNada/rfd", branch = "macos-title-message" }
+rubato = "0.14.1"
 rust-ini = "0.20.0"
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"

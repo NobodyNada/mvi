@@ -151,12 +151,7 @@ impl Ui {
             ui.select_core(extension, move |ui, core_id| {
                 ui.download_core(core_id, move |ui, core_path| {
                     ui.handle_error(|ui| {
-                        let core_path = core_path?;
-                        ui.tas = None;
-                        ui.framebuffer = None;
-                        let core = unsafe { core::Core::load(&core_path, &rom_path)? };
-                        ui.tas = Some(Tas::new(core));
-                        Ok(())
+                        ui.load_game(&core_path?, &rom_path, |core| Ok(Tas::new(core)))
                     })
                 })
             })
@@ -493,15 +488,12 @@ impl Ui {
             ui.handle_error(move |ui| {
                 let core_path = core_path?;
 
-                // TODO: reset keybind state (like modes)
-                ui.tas = None;
-                ui.framebuffer = None;
-                let core = unsafe { core::Core::load(&core_path, &rom_path)? };
-
                 let uuid = file.uuid;
-                ui.tas = Some(Tas::load(core, file, movie_path.clone())?);
-                ui.movie_cache.update(movie_path, rom_path, uuid)?;
-                Ok(())
+
+                ui.load_game(&core_path, &rom_path, |core| {
+                    Tas::load(core, file, movie_path.clone())
+                })?;
+                ui.movie_cache.update(movie_path, rom_path, uuid)
             });
         })
     }
