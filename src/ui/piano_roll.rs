@@ -1,6 +1,6 @@
 use imgui::{ListClipper, Ui};
 
-use crate::tas::{input::InputPort, Tas};
+use crate::tas::{input::InputPort, RecordMode, RunMode, Tas};
 
 use super::keybinds;
 
@@ -184,9 +184,26 @@ impl PianoRoll {
                             }
 
                             for (index, text) in buttons.iter().enumerate() {
+                                let mut autofire = false;
+                                if row == tas.selected_frame() {
+                                    if let keybinds::Mode::Insert(pattern)
+                                    | keybinds::Mode::Replace(pattern) = keybinds.mode()
+                                    {
+                                        autofire = pattern.autofire(
+                                            tas.movie().input_ports(),
+                                            0,
+                                            0,
+                                            index as u32,
+                                        );
+                                    }
+                                }
                                 let frame = &tas.frame(row)[0..input_port.frame_size()];
-                                let pressed = input_port.read(frame, 0, index as u32);
-                                let color = if pressed != 0 {
+                                let pressed = if autofire {
+                                    (ui.time() * 10.) as u64 % 2 != 0
+                                } else {
+                                    input_port.read(frame, 0, index as u32) != 0
+                                };
+                                let color = if pressed {
                                     Self::PRESSED_COLOR
                                 } else {
                                     Self::UNPRESSED_COLOR
@@ -201,7 +218,7 @@ impl PianoRoll {
                                         last: row,
                                     });
                                     let frame = &mut tas.frame_mut(row)[0..input_port.frame_size()];
-                                    input_port.write(frame, 0, index as u32, (pressed == 0) as i16);
+                                    input_port.write(frame, 0, index as u32, !pressed as i16);
                                 } else if let Some(DragMode::Input { index, last }) =
                                     &mut self.drag_mode
                                 {

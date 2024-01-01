@@ -127,7 +127,7 @@ impl Keybinds {
                 vec![(Key::Named(NamedKey::Enter), ModifiersState::empty())],
                 vec![(Key::Named(NamedKey::ArrowDown), ModifiersState::empty())],
             ],
-            |ctx, pattern| {
+            |ctx, _| {
                 ctx.tas.set_run_mode(tas::RunMode::Paused);
                 if let Mode::Insert(_) = &ctx.keybinds.mode {
                     ctx.tas.insert(
@@ -136,7 +136,13 @@ impl Keybinds {
                     );
                 }
                 ctx.tas.select_next(1);
-                ctx.tas.set_input(&pattern);
+                match &mut ctx.keybinds.mode {
+                    Mode::Insert(pattern) | Mode::Replace(pattern) => {
+                        pattern.offset += 1;
+                        ctx.tas.set_input(&pattern);
+                    }
+                    _ => unreachable!(),
+                }
             },
         );
         register_multiple(
@@ -150,6 +156,17 @@ impl Keybinds {
                 ctx.tas.set_run_mode(tas::RunMode::Paused);
                 if let tas::RunMode::Paused = ctx.tas.run_mode() {
                     ctx.tas.select_prev(1);
+                    match &mut ctx.keybinds.mode {
+                        Mode::Insert(pattern) | Mode::Replace(pattern) => {
+                            if pattern.offset == 0 {
+                                pattern.offset = pattern.len() * 2 - 1;
+                            } else {
+                                pattern.offset -= 1;
+                            }
+                            ctx.tas.set_input(&pattern);
+                        }
+                        _ => unreachable!(),
+                    }
                 }
             },
         );

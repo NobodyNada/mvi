@@ -1,8 +1,8 @@
-use std::{rc::Rc, time::Instant};
+use std::time::Instant;
 
 use crate::core::{self, Core};
 
-use self::movie::Movie;
+use self::movie::{Movie, Pattern};
 
 mod greenzone;
 pub mod input;
@@ -48,8 +48,8 @@ impl Default for RunMode {
 #[derive(Clone, Debug)]
 pub enum RecordMode {
     ReadOnly,
-    Insert(Rc<movie::Pattern>),
-    Overwrite(Rc<movie::Pattern>),
+    Insert(Pattern),
+    Overwrite(Pattern),
 }
 
 impl Tas {
@@ -177,7 +177,7 @@ impl Tas {
 
         let mut run_mode = std::mem::replace(&mut self.run_mode, RunMode::Paused);
 
-        let result = match &run_mode {
+        let result = match &mut run_mode {
             RunMode::Paused => &self.core.frame,
             RunMode::Running {
                 stop_at,
@@ -194,14 +194,11 @@ impl Tas {
                     match record_mode {
                         RecordMode::ReadOnly => {}
                         RecordMode::Insert(pattern) => {
-                            assert!(pattern.data.len() == self.movie.frame_size());
-                            self.insert(self.playback_cursor + 1, &pattern.data);
+                            self.insert_blank(self.playback_cursor + 1, 1);
+                            *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
                         }
                         RecordMode::Overwrite(pattern) => {
-                            assert!(pattern.data.len() == self.movie.frame_size());
-                            self.movie
-                                .frame_mut(self.playback_cursor + 1)
-                                .copy_from_slice(&pattern.data);
+                            *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
                         }
                     }
                     assert!(self.next_emulator_frame == self.playback_cursor + 1);
@@ -232,19 +229,34 @@ impl Tas {
         self.run_mode = mode;
     }
 
-    pub fn set_input(&mut self, pattern: &Rc<movie::Pattern>) {
+    pub fn set_input(&mut self, pattern: &Pattern) {
         let mut mode = std::mem::take(self.run_mode_mut());
         match &mut mode {
-            RunMode::Paused => self
-                .frame_mut(self.selected_frame())
-                .copy_from_slice(&pattern.data),
+            RunMode::Paused => {
+                _ = self.apply(pattern, self.selected_frame(), 1);
+            }
             RunMode::Running {
                 stop_at: _,
                 record_mode: RecordMode::Insert(p) | RecordMode::Overwrite(p),
-            } => *p = pattern.clone(),
+            } => {
+                *p = Pattern {
+                    buf: pattern.buf.clone(),
+                    offset: p.offset,
+                }
+            }
             _ => {}
         };
         self.set_run_mode(mode);
+    }
+
+    pub fn apply(&mut self, pattern: &Pattern, index: u32, len: usize) -> Pattern {
+        self.ensure_length(index + len as u32);
+        self.invalidate(index);
+        let frame_size = self.movie.frame_size();
+        pattern.apply(
+            &self.movie.input_ports,
+            &mut self.movie.data[index as usize * frame_size..][..len * frame_size],
+        )
     }
 
     pub fn av_info(&self) -> libretro_ffi::retro_system_av_info {
@@ -286,6 +298,24 @@ impl Tas {
         self.movie
             .data
             .splice(insert_idx..insert_idx, buf.iter().cloned());
+    }
+
+    pub fn insert_blank(&mut self, idx: u32, len: usize) {
+        self.invalidate(idx);
+        self.movie.ensure_length(idx);
+
+        let size = self.movie.frame_size();
+        let insert_idx = idx as usize * size;
+        self.movie.data.splice(
+            insert_idx..insert_idx,
+            self.movie
+                .default_pattern
+                .data
+                .iter()
+                .cloned()
+                .cycle()
+                .take(len * size),
+        );
     }
 
     pub fn seek_to(&mut self, frame: u32) {

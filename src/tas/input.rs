@@ -18,6 +18,26 @@ impl InputPort {
         }
     }
 
+    /// The number of inputs on the given controller index attached to this input port.
+    pub fn num_inputs(&self, index: u32) -> u32 {
+        match self {
+            Self::Joypad(j) => {
+                if index == 0 {
+                    j.buttons().len() as u32
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// The total number of controller inputs on all controllers attached to this input port.
+    pub fn total_inputs(&self) -> u32 {
+        match self {
+            Self::Joypad(j) => j.buttons().len() as u32,
+        }
+    }
+
     /// The number of bytes of memory needed to store one frames' worth of input data.
     pub fn frame_size(&self) -> usize {
         match self {

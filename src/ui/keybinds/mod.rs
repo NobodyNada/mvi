@@ -42,8 +42,8 @@ pub struct Keybinds {
 #[derive(Debug)]
 pub enum Mode {
     Normal { count: u32 },
-    Insert(Rc<Pattern>),
-    Replace(Rc<Pattern>),
+    Insert(Pattern),
+    Replace(Pattern),
 }
 
 /// The keybind configuration in a form convenient for editing and serializing.
@@ -177,7 +177,6 @@ impl Keybinds {
         tas: &mut Tas,
         piano_roll: &mut PianoRoll,
     ) {
-        let key = Self::normalize(key);
         let input = self.get_input_binding(tas.movie().input_ports(), &key);
 
         // The numeric value of this key, if it's a digit.
@@ -213,9 +212,26 @@ impl Keybinds {
         match (&mut self.mode, input, modal, global) {
             // In insert mode, controller bindings get priority over all else
             (Mode::Insert(pattern) | Mode::Replace(pattern), Some((port, index, id)), _, _) => {
-                if pattern.read(tas.movie().input_ports(), port, 0, id) != 1 {
-                    Rc::make_mut(pattern).write(&tas.movie().input_ports(), port, index, id, 1);
+                if modifiers.alt_key() {
+                    // Toggle autofire
+                    *pattern.autofire_mut(tas.movie().input_ports(), port, index, id) ^= true;
                     tas.set_input(pattern);
+                } else {
+                    if pattern.autofire(tas.movie().input_ports(), port, index, id) {
+                        *pattern.autofire_mut(tas.movie().input_ports(), port, index, id) = false;
+                    }
+                    // Toggle autohold
+                    if modifiers.shift_key() {
+                        *pattern.autohold_mut(tas.movie().input_ports(), port, index, id) ^= true;
+                        // we don't need to call tas.set_input because TAS doesn't care about
+                        // autohold, only us
+                    } else if pattern.autohold(tas.movie().input_ports(), port, index, id) {
+                        *pattern.autohold_mut(tas.movie().input_ports(), port, index, id) = false;
+                    }
+                    if pattern.read(tas.movie().input_ports(), port, 0, id) != 1 {
+                        pattern.write(&tas.movie().input_ports(), port, index, id, 1);
+                        tas.set_input(pattern);
+                    }
                 }
                 self.reset_bindings();
                 return;
@@ -259,11 +275,13 @@ impl Keybinds {
         tas: &mut Tas,
         _piano_roll: &mut PianoRoll,
     ) {
-        let key = Self::normalize(key);
         if let Some((port, index, id)) = self.get_input_binding(tas.movie().input_ports(), &key) {
             if let Mode::Insert(pattern) | Mode::Replace(pattern) = &mut self.mode {
-                if pattern.read(tas.movie().input_ports(), port, index, id) != 0 {
-                    Rc::make_mut(pattern).write(&tas.movie().input_ports(), port, index, id, 0);
+                if !pattern.autofire(tas.movie().input_ports(), port, index, id)
+                    && !pattern.autohold(tas.movie().input_ports(), port, index, id)
+                    && pattern.read(tas.movie().input_ports(), port, index, id) != 0
+                {
+                    pattern.write(&tas.movie().input_ports(), port, index, id, 0);
                     tas.set_input(pattern);
                 }
             }
@@ -274,14 +292,6 @@ impl Keybinds {
     pub fn reset(&mut self) {
         self.mode = Mode::Normal { count: 0 };
         self.reset_bindings();
-    }
-
-    fn normalize(key: Key) -> Key {
-        match key {
-            // Convert uppercase keys to lowercase -- we'll check for Shift directly.
-            Key::Character(c) => Key::Character(c.to_lowercase().into()),
-            k => k,
-        }
     }
 
     fn reset_bindings(&mut self) {
@@ -312,9 +322,7 @@ impl Keybinds {
     }
 
     fn start_insert(&mut self, tas: &mut Tas, is_replace: bool, is_append: bool) {
-        let pattern = Rc::new(Pattern {
-            data: tas.movie().default_frame().to_vec(),
-        });
+        let mut pattern = tas.movie().default_pattern();
         let mode = match tas.run_mode() {
             tas::RunMode::Paused => tas::RunMode::Paused,
             tas::RunMode::Running {
@@ -337,10 +345,11 @@ impl Keybinds {
             // If the movie only has one blank frame, overwrite it insead of inserting
             if tas.movie().len() > 1 || tas.frame(0) != tas.movie().default_frame() {
                 if is_append {
-                    tas.insert(tas.selected_frame() + 1, &pattern.data);
+                    tas.insert_blank(tas.selected_frame() + 1, 1);
+                    pattern = tas.apply(&pattern, tas.selected_frame() + 1, 1);
                     tas.select_next(1);
                 } else {
-                    tas.insert(tas.selected_frame(), &pattern.data);
+                    tas.insert_blank(tas.selected_frame(), 1);
                 }
             }
             self.mode = Mode::Insert(pattern);

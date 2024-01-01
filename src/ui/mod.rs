@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Error, Result};
 use crossbeam::atomic::AtomicCell;
 use vk::{command_buffer::PrimaryCommandBufferAbstract, sync::GpuFuture};
 use vulkano as vk;
-use winit::keyboard::NamedKey;
+use winit::{keyboard::NamedKey, platform::modifier_supplement::KeyEventExtModifierSupplement};
 
 use crate::{
     core::{self, Frame},
@@ -354,14 +354,10 @@ impl Ui {
             } => match e {
                 winit::event::WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
                 winit::event::WindowEvent::KeyboardInput {
-                    event:
-                        winit::event::KeyEvent {
-                            state,
-                            logical_key: key,
-                            ..
-                        },
+                    event: e @ winit::event::KeyEvent { state, .. },
                     ..
                 } => {
+                    let key = e.key_without_modifiers();
                     if let winit::keyboard::Key::Named(
                         NamedKey::Control | NamedKey::Shift | NamedKey::Super | NamedKey::Alt,
                     ) = key
