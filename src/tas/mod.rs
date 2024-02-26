@@ -56,7 +56,7 @@ impl Tas {
     pub fn new(mut core: Core) -> Tas {
         let input_ports = vec![input::InputPort::Joypad(input::Joypad::Snes)];
 
-        let frame_0 = core.save_state();
+        let frame_0 = core.save_state(None);
 
         let movie = Movie::new(
             input_ports,
@@ -85,7 +85,7 @@ impl Tas {
         file: movie::file::MovieFile,
         movie_path: std::path::PathBuf,
     ) -> anyhow::Result<Tas> {
-        let frame_0 = core.save_state();
+        let frame_0 = core.save_state(None);
         let movie = Movie::load(
             file,
             movie_path,
@@ -138,9 +138,12 @@ impl Tas {
         self.core
             .run_frame(frame, &self.movie.input_ports, audio_callback);
         self.next_emulator_frame += 1;
-        self.movie
-            .greenzone
-            .save(self.next_emulator_frame, self.core.save_state().compress());
+        self.movie.greenzone.save(
+            self.next_emulator_frame,
+            self.core
+                .save_state(Some((frame, &self.movie.input_ports)))
+                .compress(),
+        );
         if self.playback_cursor < self.next_emulator_frame - 1 {
             let n = self.next_emulator_frame - self.playback_cursor - 1;
             self.playback_cursor += n;

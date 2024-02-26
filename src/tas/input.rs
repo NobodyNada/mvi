@@ -66,6 +66,18 @@ impl InputPort {
             Self::Joypad(j) => j.default(buf),
         }
     }
+
+    /// Constructs an empty frame of input for multiple ports.
+    pub fn defaults(ports: &[InputPort]) -> Vec<u8> {
+        let mut default_frame = Vec::new();
+        for input in ports {
+            let offset = default_frame.len();
+            let len = input.frame_size();
+            default_frame.resize(offset + len, 0);
+            input.default(&mut default_frame[offset..(offset + len)]);
+        }
+        default_frame
+    }
 }
 
 impl std::fmt::Display for InputPort {

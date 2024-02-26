@@ -164,12 +164,26 @@ impl Core {
     }
 
     /// Saves the current state of the emulated system.
-    pub fn save_state(&mut self) -> SavestateBuffer<'_> {
+    pub fn save_state(
+        &mut self,
+        input: Option<(&[u8], &[crate::tas::input::InputPort])>,
+    ) -> SavestateBuffer<'_> {
         unsafe {
+            if let Some(input) = input {
+                let mut core = self.lock();
+                core.input = input.0 as *const [u8];
+                core.input_ports = input.1 as *const [InputPort];
+                std::mem::drop(core);
+            }
+
             assert!((symbols().retro_serialize)(
                 self.savestate_buffer.as_mut_ptr().cast(),
                 self.savestate_buffer.len()
             ));
+
+            let mut core = self.lock();
+            core.input = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
+            core.input_ports = std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
         }
         SavestateBuffer::new(&self.savestate_buffer, self.instance_id)
     }

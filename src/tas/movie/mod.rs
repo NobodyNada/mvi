@@ -48,20 +48,13 @@ pub struct Pattern {
 
 impl Movie {
     pub fn new(
-        input_ports: Vec<input::InputPort>,
+        input_ports: Vec<InputPort>,
         frame_0: core::Savestate,
         core_id: String,
         rom_path: std::path::PathBuf,
         rom_sha256: [u8; 32],
     ) -> Movie {
-        let mut default_frame = Vec::new();
-        for input in &input_ports {
-            let offset = default_frame.len();
-            let len = input.frame_size();
-            default_frame.resize(offset + len, 0);
-            input.default(&mut default_frame[offset..(offset + len)]);
-        }
-
+        let mut default_frame = InputPort::defaults(&input_ports);
         Movie {
             greenzone: Greenzone::new(frame_0),
             input_ports,
