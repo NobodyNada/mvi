@@ -54,7 +54,7 @@ impl Movie {
         rom_path: std::path::PathBuf,
         rom_sha256: [u8; 32],
     ) -> Movie {
-        let mut default_frame = InputPort::defaults(&input_ports);
+        let default_frame = InputPort::defaults(&input_ports);
         Movie {
             greenzone: Greenzone::new(frame_0),
             input_ports,
@@ -178,6 +178,7 @@ impl Movie {
     }
 }
 
+#[allow(dead_code)]
 impl Pattern {
     pub fn read(&self, input_ports: &[input::InputPort], port: u32, index: u32, id: u32) -> i16 {
         let port = port as usize;
@@ -344,5 +345,29 @@ impl Pattern {
 
     fn input_count(input_ports: &[InputPort]) -> usize {
         input_ports.iter().map(InputPort::total_inputs).sum::<u32>() as usize
+    }
+
+    /// Cycles the pattern to fill the buffer with `len` frames.
+    /// For example, consider the following pattern:
+    ///     A     L
+    ///      B     R
+    /// Calling pattern.expand(8) expands the pattern to 8 frames:
+    ///     A     L
+    ///      B     R
+    ///     A     L
+    ///      B     R
+    ///     A     L
+    ///      B     R
+    ///     A     L
+    ///      B     R
+    /// Note that pattern expansion disables autofire and autohold, at least for now.
+    pub fn expand(&mut self, input_ports: &[InputPort], len: u32) {
+        let old_frames = self.buf.data.len() / self.buf.frame_size;
+        if self.buf.data.len() / self.buf.frame_size < len as usize {
+            let mut buf = PatternBuf::clone(&self.buf);
+            buf.data.resize(len as usize * buf.frame_size, 0);
+            self.apply(input_ports, &mut buf.data[old_frames * buf.frame_size..]);
+            self.buf = Rc::new(buf);
+        }
     }
 }

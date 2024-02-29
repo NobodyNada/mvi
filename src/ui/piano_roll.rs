@@ -1,6 +1,12 @@
+use std::rc::Rc;
+
 use imgui::{ListClipper, Ui};
 
-use crate::tas::{input::InputPort, RecordMode, RunMode, Tas};
+use crate::tas::{
+    input::InputPort,
+    movie::{Pattern, PatternBuf},
+    Action, ActionKind, Tas,
+};
 
 use super::keybinds;
 
@@ -25,7 +31,7 @@ pub enum ScrollLock {
 pub enum DragMode {
     Playback,
     Selection,
-    Input { index: u32, last: u32 },
+    Input { index: u32, start: u32, end: u32 },
 }
 
 impl ScrollLock {
@@ -71,7 +77,60 @@ impl PianoRoll {
 
     pub fn draw(&mut self, ui: &Ui, tas: &mut Tas, keybinds: &keybinds::Keybinds) {
         if !ui.is_mouse_down(imgui::MouseButton::Left) {
-            self.drag_mode = None;
+            match self.drag_mode.take() {
+                Some(DragMode::Input { index, start, end }) => {
+                    // Create an undo action toggling all inputs
+                    // between 'start' and 'end' inclusive.
+                    let len = start.abs_diff(end) + 1;
+                    let frame_size = tas.movie().frame_size();
+                    let mut previous = Vec::with_capacity(frame_size * len as usize);
+                    let mut pattern_buf = Vec::with_capacity(frame_size * len as usize);
+                    // TODO: multi-input support
+                    let input_port = tas.movie().input_ports()[0];
+
+                    for i in start.min(end)..=start.max(end) {
+                        let frame = tas.movie().frame(i);
+                        let frame_start = previous.len();
+                        pattern_buf.extend_from_slice(frame);
+                        previous.extend_from_slice(frame);
+                        input_port.write(
+                            &mut previous[frame_start..],
+                            0,
+                            index,
+                            (input_port.read(frame, 0, index) == 0) as i16,
+                        );
+                    }
+
+                    let mut mask = Vec::new();
+                    mask.resize(
+                        tas.movie()
+                            .input_ports()
+                            .iter()
+                            .map(InputPort::total_inputs)
+                            .sum::<u32>() as usize,
+                        false,
+                    );
+                    mask[index as usize] = true; // TODO: multi-input support
+
+                    tas.push_undo(Action {
+                        cursor: start.min(end),
+                        kind: ActionKind::Apply {
+                            pattern: Pattern {
+                                buf: Rc::new(PatternBuf {
+                                    data: pattern_buf,
+                                    frame_size,
+                                    mask: Some(mask),
+                                    autofire: None,
+                                    autohold: None,
+                                }),
+                                offset: 0,
+                            },
+                            previous,
+                        },
+                    })
+                }
+                _ => {}
+            }
         }
 
         let padding = unsafe { ui.style().window_padding };
@@ -172,22 +231,14 @@ impl PianoRoll {
                                     && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                             {
                                 self.drag_mode = Some(DragMode::Selection);
-                                match row.cmp(&tas.selected_frame()) {
-                                    std::cmp::Ordering::Less => {
-                                        tas.select_prev(tas.selected_frame() - row)
-                                    }
-                                    std::cmp::Ordering::Greater => {
-                                        tas.select_next(row - tas.selected_frame())
-                                    }
-                                    std::cmp::Ordering::Equal => {}
-                                }
+                                tas.select(row);
                             }
 
                             for (index, text) in buttons.iter().enumerate() {
                                 let mut autofire = false;
                                 if row == tas.selected_frame() {
-                                    if let keybinds::Mode::Insert(pattern)
-                                    | keybinds::Mode::Replace(pattern) = keybinds.mode()
+                                    if let keybinds::Mode::Insert { pattern, .. }
+                                    | keybinds::Mode::Replace { pattern, .. } = keybinds.mode()
                                     {
                                         autofire = pattern.autofire(
                                             tas.movie().input_ports(),
@@ -215,21 +266,84 @@ impl PianoRoll {
                                 if ui.is_item_clicked() {
                                     self.drag_mode = Some(DragMode::Input {
                                         index: index as u32,
-                                        last: row,
+                                        start: row,
+                                        end: row,
                                     });
                                     let frame = &mut tas.frame_mut(row)[0..input_port.frame_size()];
                                     input_port.write(frame, 0, index as u32, !pressed as i16);
-                                } else if let Some(DragMode::Input { index, last }) =
+                                } else if let Some(DragMode::Input { index, start, end }) =
                                     &mut self.drag_mode
                                 {
                                     if ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
-                                        && row != *last
+                                        && row != *end
                                     {
-                                        // toggle all inputs between last and row,
-                                        // inclusive of row but exclusive of last
-                                        let min = std::cmp::min(row, *last + 1);
-                                        let max = std::cmp::max(row + 1, *last);
+                                        // Determine inputs to toggle.
+
+                                        // Is the user adding new rows to the selection?
+                                        let expanding = if row > *start {
+                                            row > *end
+                                        } else if row < *start {
+                                            row < *end
+                                        } else {
+                                            false
+                                        };
+
+                                        // Is the user removing rows from the selection?
+                                        // (Note that it's possible for both expanding and
+                                        //  contracting to be true. If the selection crosses the
+                                        //  start pointer in one frame, the user is contracting the
+                                        //  side they left and expanding the side they entered.
+                                        let contracting = if *end > *start {
+                                            row < *end
+                                        } else if *end < *start {
+                                            row > *end
+                                        } else {
+                                            false
+                                        };
+
+                                        // We need to toggle from the previously hovered row to the
+                                        // newly hovered row. Whether these bounds are inclusive or
+                                        // exclusive depends on whether we're expanding or
+                                        // contracting the selection:
+                                        //
+                                        // If expanding, we want to include the current row, so
+                                        //  that dragged-over rows are added to the selection.
+                                        // If not, don't include the current row -- if the user
+                                        //  drags away from a row, we want to deselect the row
+                                        //  they dragged away from, not the row they dragged to.
+                                        //
+                                        // If contracting, we want to include the previous row.
+                                        //  If not, we want to exclude the previous row.
+
+                                        let min;
+                                        let max;
+                                        if *end < row {
+                                            if contracting {
+                                                min = *end
+                                            } else {
+                                                min = *end + 1;
+                                            }
+                                            if expanding {
+                                                max = row + 1;
+                                            } else {
+                                                max = row;
+                                            }
+                                        } else {
+                                            if contracting {
+                                                max = *end + 1;
+                                            } else {
+                                                max = *end;
+                                            }
+                                            if expanding {
+                                                min = row;
+                                            } else {
+                                                min = row + 1;
+                                            }
+                                        };
                                         for i in min..max {
+                                            if i == *start {
+                                                continue;
+                                            }
                                             let frame =
                                                 &mut tas.frame_mut(i)[0..input_port.frame_size()];
                                             input_port.write(
@@ -239,7 +353,7 @@ impl PianoRoll {
                                                 (input_port.read(frame, 0, *index) == 0) as i16,
                                             );
                                         }
-                                        *last = row;
+                                        *end = row;
                                     }
                                 }
                             }

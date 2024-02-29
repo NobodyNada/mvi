@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{rc::Rc, time::Instant};
 
 use crate::core::{self, Core};
 
@@ -28,9 +28,13 @@ pub struct Tas {
     selection_locked: bool,
 
     movie: Movie,
+
+    undo_history: Vec<Action>,
+    undo_index: usize,
+    repeatable_action: Option<Action>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum RunMode {
     Running {
         stop_at: Option<u32>,
@@ -45,11 +49,44 @@ impl Default for RunMode {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum RecordMode {
     ReadOnly,
-    Insert(Pattern),
-    Overwrite(Pattern),
+    Insert { pattern: Pattern, action: Action },
+    Overwrite { pattern: Pattern, action: Action },
+}
+
+/// An action in the undo history. Actions can be undone, redone, or repeated.
+#[derive(Debug, Clone)]
+pub struct Action {
+    /// The location of the edit.
+    pub cursor: u32,
+
+    /// What the edit was.
+    pub kind: ActionKind,
+}
+
+impl Action {
+    /// Returns true if this action is blank.
+    fn is_empty(&self) -> bool {
+        match &self.kind {
+            ActionKind::Insert(frames)
+            | ActionKind::Delete(frames)
+            | ActionKind::Apply {
+                previous: frames, ..
+            } => frames.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ActionKind {
+    /// Insert the given frames at the cursor.
+    Insert(Vec<u8>),
+    /// Delete the given frames at the cursor.
+    Delete(Vec<u8>),
+    /// Apply a given pattern to the given contents, starting at the cursor.
+    Apply { pattern: Pattern, previous: Vec<u8> },
 }
 
 impl Tas {
@@ -74,6 +111,9 @@ impl Tas {
 
             selected_frame: 0,
             selection_locked: true,
+            undo_history: Vec::new(),
+            undo_index: 0,
+            repeatable_action: None,
 
             movie,
             core,
@@ -104,6 +144,9 @@ impl Tas {
 
             selected_frame: 0,
             selection_locked: true,
+            undo_history: Vec::new(),
+            undo_index: 0,
+            repeatable_action: None,
 
             movie,
             core,
@@ -194,14 +237,39 @@ impl Tas {
                         }
                     }
 
+                    // If we're recording, write the user input.
                     match record_mode {
-                        RecordMode::ReadOnly => {}
-                        RecordMode::Insert(pattern) => {
+                        RecordMode::ReadOnly => {
+                            // We're not recording, nothing to do.
+                        }
+                        RecordMode::Insert { pattern, action } => {
+                            // Insert a blank frame, and apply the pattern to it.
                             self.insert_blank(self.playback_cursor + 1, 1);
                             *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
+
+                            // Update the undo history.
+                            let ActionKind::Insert(frames) = &mut action.kind else {
+                                unreachable!("unexpected action kind");
+                            };
+                            frames.extend_from_slice(self.frame(self.playback_cursor + 1));
                         }
-                        RecordMode::Overwrite(pattern) => {
+                        RecordMode::Overwrite { pattern: _, action } => {
+                            // Update the undo history.
+                            let ActionKind::Apply { pattern, previous } = &mut action.kind else {
+                                unreachable!("unexpected action kind");
+                            };
+                            let old_len = previous.len();
+                            previous.extend_from_slice(self.frame(self.playback_cursor + 1));
+
+                            // Apply the pattern to the current frame.
                             *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
+
+                            pattern.expand(
+                                self.movie().input_ports(),
+                                (previous.len() / pattern.buf.frame_size) as u32,
+                            );
+                            Rc::make_mut(&mut pattern.buf).data[old_len..]
+                                .copy_from_slice(self.frame(self.playback_cursor + 1));
                         }
                     }
                     assert!(self.next_emulator_frame == self.playback_cursor + 1);
@@ -229,7 +297,17 @@ impl Tas {
     }
 
     pub fn set_run_mode(&mut self, mode: RunMode) {
-        self.run_mode = mode;
+        let old_mode = std::mem::replace(&mut self.run_mode, mode);
+
+        // If we had pending undo actions, commit them.
+        if let RunMode::Running { record_mode, .. } = old_mode {
+            match record_mode {
+                RecordMode::ReadOnly => {}
+                RecordMode::Insert { action, .. } | RecordMode::Overwrite { action, .. } => {
+                    self.push_undo(action)
+                }
+            }
+        }
     }
 
     pub fn set_input(&mut self, pattern: &Pattern) {
@@ -240,7 +318,8 @@ impl Tas {
             }
             RunMode::Running {
                 stop_at: _,
-                record_mode: RecordMode::Insert(p) | RecordMode::Overwrite(p),
+                record_mode:
+                    RecordMode::Insert { pattern: p, .. } | RecordMode::Overwrite { pattern: p, .. },
             } => {
                 *p = Pattern {
                     buf: pattern.buf.clone(),
@@ -291,6 +370,7 @@ impl Tas {
         self.movie.ensure_length(len);
     }
 
+    /// Inserts a frame of input before the specified index.
     pub fn insert(&mut self, idx: u32, buf: &[u8]) {
         let size = self.movie.frame_size();
         assert_eq!(buf.len() % size, 0);
@@ -303,6 +383,7 @@ impl Tas {
             .splice(insert_idx..insert_idx, buf.iter().cloned());
     }
 
+    /// Inserts a blank frame before the specified index.
     pub fn insert_blank(&mut self, idx: u32, len: usize) {
         self.invalidate(idx);
         self.movie.ensure_length(idx);
@@ -330,6 +411,14 @@ impl Tas {
         }
     }
 
+    pub fn select(&mut self, frame: u32) {
+        if frame < self.selected_frame {
+            self.select_prev(self.selected_frame - frame);
+        } else if frame > self.selected_frame {
+            self.select_next(frame - self.selected_frame);
+        }
+    }
+
     pub fn select_next(&mut self, n: u32) {
         let n = n.min(self.movie.len().saturating_sub(self.selected_frame() + 1));
         self.selected_frame += n;
@@ -345,5 +434,87 @@ impl Tas {
             self.seek_to(self.playback_cursor.saturating_sub(n));
         }
         self.run_mode = RunMode::Paused;
+    }
+
+    pub fn push_undo(&mut self, action: Action) {
+        if !action.is_empty() {
+            self.undo_history.truncate(self.undo_index);
+            self.undo_history.push(action);
+            self.undo_index = self.undo_history.len();
+        }
+    }
+
+    pub fn push_repeatable(&mut self, action: Action) {
+        self.push_undo(action.clone());
+        self.repeatable_action = Some(action);
+    }
+
+    pub fn undo(&mut self, action: &Action) {
+        self.invalidate(action.cursor);
+        let start = action.cursor as usize * self.movie.frame_size();
+        match &action.kind {
+            ActionKind::Insert(frames) => {
+                let end = start + frames.len();
+                self.movie.data.drain(start..end);
+            }
+            ActionKind::Delete(frames) => {
+                self.movie.data.splice(start..start, frames.iter().cloned());
+            }
+            ActionKind::Apply {
+                pattern: _,
+                previous,
+            } => {
+                self.movie.data[start..start + previous.len()].copy_from_slice(previous);
+            }
+        }
+        self.select(action.cursor.min(self.movie.len().saturating_sub(1)));
+    }
+
+    pub fn undo_latest(&mut self) {
+        if self.undo_index != 0 {
+            self.undo_index -= 1;
+            let undo_history = std::mem::take(&mut self.undo_history);
+            self.undo(&undo_history[self.undo_index]);
+            self.undo_history = undo_history;
+        }
+    }
+
+    pub fn redo(&mut self, action: &Action) {
+        self.invalidate(action.cursor);
+        let start = action.cursor as usize * self.movie.frame_size();
+        match &action.kind {
+            ActionKind::Insert(frames) => {
+                self.movie.data.splice(start..start, frames.iter().cloned());
+            }
+            ActionKind::Delete(frames) => {
+                let end = start + frames.len();
+                self.movie.data.drain(start..end);
+            }
+            ActionKind::Apply { pattern, previous } => {
+                pattern.apply(
+                    &self.movie.input_ports,
+                    &mut self.movie.data[start..start + previous.len()],
+                );
+            }
+        }
+        self.select(action.cursor.min(self.movie.len().saturating_sub(1)));
+    }
+
+    pub fn redo_latest(&mut self) {
+        if self.undo_index < self.undo_history.len() {
+            let undo_history = std::mem::take(&mut self.undo_history);
+            self.redo(&undo_history[self.undo_index]);
+            self.undo_history = undo_history;
+            self.undo_index += 1;
+        }
+    }
+
+    pub fn repeat(&mut self) {
+        if let Some(mut action) = self.repeatable_action.take() {
+            action.cursor = self.selected_frame;
+            self.redo(&action);
+            self.push_undo(action.clone());
+            self.repeatable_action = Some(action);
+        };
     }
 }

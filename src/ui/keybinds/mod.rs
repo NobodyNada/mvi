@@ -7,7 +7,7 @@ use std::{
 use smallvec::SmallVec;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use crate::tas::{self, movie::Pattern, Tas};
+use crate::tas::{self, movie::Pattern, Action, Tas};
 
 use super::piano_roll::PianoRoll;
 
@@ -41,9 +41,17 @@ pub struct Keybinds {
 /// The current editor mode.
 #[derive(Debug)]
 pub enum Mode {
-    Normal { count: u32 },
-    Insert(Pattern),
-    Replace(Pattern),
+    Normal {
+        count: u32,
+    },
+    Insert {
+        pattern: Pattern,
+        action: Option<Action>,
+    },
+    Replace {
+        pattern: Pattern,
+        action: Option<Action>,
+    },
 }
 
 /// The keybind configuration in a form convenient for editing and serializing.
@@ -211,7 +219,12 @@ impl Keybinds {
         // Did any actions match?
         match (&mut self.mode, input, modal, global) {
             // In insert mode, controller bindings get priority over all else
-            (Mode::Insert(pattern) | Mode::Replace(pattern), Some((port, index, id)), _, _) => {
+            (
+                Mode::Insert { pattern, action } | Mode::Replace { pattern, action },
+                Some((port, index, id)),
+                _,
+                _,
+            ) => {
                 if modifiers.alt_key() {
                     // Toggle autofire
                     *pattern.autofire_mut(tas.movie().input_ports(), port, index, id) ^= true;
@@ -233,6 +246,9 @@ impl Keybinds {
                         tas.set_input(pattern);
                     }
                 }
+                if let tas::RunMode::Paused = tas.run_mode() {
+                    Self::write_input_change_to_action(tas, pattern, action)
+                }
                 self.reset_bindings();
                 return;
             }
@@ -251,7 +267,7 @@ impl Keybinds {
 
         let modal_bindings = match self.mode {
             Mode::Normal { .. } => &mut self.normal_bindings,
-            Mode::Insert(..) | Mode::Replace(..) => &mut self.insert_bindings,
+            Mode::Insert { .. } | Mode::Replace { .. } => &mut self.insert_bindings,
         };
         // If nothing matches at all, reset all the tries.
         if self.global_bindings.current.is_none() && modal_bindings.current.is_none() {
@@ -276,14 +292,68 @@ impl Keybinds {
         _piano_roll: &mut PianoRoll,
     ) {
         if let Some((port, index, id)) = self.get_input_binding(tas.movie().input_ports(), &key) {
-            if let Mode::Insert(pattern) | Mode::Replace(pattern) = &mut self.mode {
+            if let Mode::Insert { pattern, action } | Mode::Replace { pattern, action } =
+                &mut self.mode
+            {
                 if !pattern.autofire(tas.movie().input_ports(), port, index, id)
                     && !pattern.autohold(tas.movie().input_ports(), port, index, id)
                     && pattern.read(tas.movie().input_ports(), port, index, id) != 0
                 {
                     pattern.write(&tas.movie().input_ports(), port, index, id, 0);
                     tas.set_input(pattern);
+                    if let tas::RunMode::Paused = tas.run_mode() {
+                        Self::write_input_change_to_action(tas, pattern, action)
+                    }
                 }
+            }
+        }
+    }
+
+    fn write_input_change_to_action(tas: &Tas, pattern: &Pattern, action: &mut Option<Action>) {
+        let action = action.get_or_insert_with(|| Action {
+            cursor: tas.selected_frame(),
+            kind: tas::ActionKind::Apply {
+                pattern: tas.movie().default_pattern(),
+                previous: tas.frame(tas.selected_frame()).to_vec(),
+            },
+        });
+        match &mut action.kind {
+            tas::ActionKind::Insert(frames) => {
+                assert_eq!(
+                    action.cursor + (frames.len() / pattern.buf.frame_size) as u32 - 1,
+                    tas.selected_frame()
+                );
+                if frames.len() >= pattern.buf.frame_size {
+                    let len = frames.len();
+                    Pattern {
+                        buf: pattern.buf.clone(),
+                        offset: frames.len() / pattern.buf.frame_size,
+                    }
+                    .apply(
+                        tas.movie().input_ports(),
+                        &mut frames[len - pattern.buf.frame_size..],
+                    );
+                }
+            }
+            tas::ActionKind::Delete(_) => unreachable!("unexpected action kind"),
+            tas::ActionKind::Apply {
+                pattern: p,
+                previous,
+            } => {
+                assert_eq!(
+                    action.cursor + (previous.len() / pattern.buf.frame_size) as u32 - 1,
+                    tas.selected_frame()
+                );
+                p.expand(
+                    &tas.movie().input_ports(),
+                    (tas.selected_frame() - action.cursor) + 1,
+                );
+                let buf = Rc::make_mut(&mut p.buf);
+                pattern.apply(
+                    &tas.movie().input_ports(),
+                    &mut buf.data
+                        [(tas.selected_frame() - action.cursor) as usize * buf.frame_size..],
+                );
             }
         }
     }
@@ -305,16 +375,40 @@ impl Keybinds {
 
     fn toggle_playback(&mut self, tas: &mut Tas) {
         let mode = match tas.run_mode() {
-            tas::RunMode::Running {
-                stop_at: _,
-                record_mode: _,
-            } => tas::RunMode::Paused,
+            tas::RunMode::Running { .. } => tas::RunMode::Paused,
             tas::RunMode::Paused => tas::RunMode::Running {
                 stop_at: None,
-                record_mode: match &self.mode {
+                record_mode: match &mut self.mode {
+                    // If paused, start the emulator in the appropriate recording mode.
                     Mode::Normal { .. } => tas::RecordMode::ReadOnly,
-                    Mode::Insert(pattern) => tas::RecordMode::Insert(pattern.clone()),
-                    Mode::Replace(pattern) => tas::RecordMode::Overwrite(pattern.clone()),
+                    Mode::Insert { pattern, action } => {
+                        if let Some(action) = action.take() {
+                            // If we have pending undo actions, push them.
+                            tas.push_repeatable(action);
+                        }
+                        tas::RecordMode::Insert {
+                            pattern: pattern.clone(),
+                            action: Action {
+                                cursor: tas.playback_frame() + 1,
+                                kind: tas::ActionKind::Insert(Vec::new()),
+                            },
+                        }
+                    }
+                    Mode::Replace { pattern, action } => {
+                        if let Some(action) = action.take() {
+                            tas.push_repeatable(action);
+                        }
+                        tas::RecordMode::Overwrite {
+                            pattern: pattern.clone(),
+                            action: Action {
+                                cursor: tas.playback_frame() + 1,
+                                kind: tas::ActionKind::Apply {
+                                    pattern: tas.movie().default_pattern(),
+                                    previous: Vec::new(),
+                                },
+                            },
+                        }
+                    }
                 },
             },
         };
@@ -331,18 +425,44 @@ impl Keybinds {
             } => tas::RunMode::Running {
                 stop_at: *stop_at,
                 record_mode: if is_replace {
-                    tas::RecordMode::Overwrite(pattern.clone())
+                    tas::RecordMode::Overwrite {
+                        pattern: pattern.clone(),
+                        action: Action {
+                            cursor: tas.playback_frame() + 1,
+                            kind: tas::ActionKind::Apply {
+                                pattern: tas.movie().default_pattern(),
+                                previous: Vec::new(),
+                            },
+                        },
+                    }
                 } else {
-                    tas::RecordMode::Insert(pattern.clone())
+                    tas::RecordMode::Insert {
+                        pattern: pattern.clone(),
+                        action: Action {
+                            cursor: tas.playback_frame() + 1,
+                            kind: tas::ActionKind::Insert(Vec::new()),
+                        },
+                    }
                 },
             },
         };
         tas.set_run_mode(mode);
         tas.ensure_length(tas.selected_frame() + 1);
         if is_replace {
-            self.mode = Mode::Replace(pattern);
+            let selected_frame = tas.frame(tas.selected_frame()).to_vec();
+            self.mode = Mode::Replace {
+                pattern: pattern.clone(),
+                action: Some(Action {
+                    cursor: tas.selected_frame(),
+                    kind: tas::ActionKind::Apply {
+                        pattern,
+                        previous: selected_frame,
+                    },
+                }),
+            };
         } else {
             // If the movie only has one blank frame, overwrite it insead of inserting
+            let action: Action;
             if tas.movie().len() > 1 || tas.frame(0) != tas.movie().default_frame() {
                 if is_append {
                     tas.insert_blank(tas.selected_frame() + 1, 1);
@@ -351,8 +471,24 @@ impl Keybinds {
                 } else {
                     tas.insert_blank(tas.selected_frame(), 1);
                 }
+
+                action = Action {
+                    cursor: tas.selected_frame(),
+                    kind: tas::ActionKind::Insert(tas.movie().default_frame().to_vec()),
+                };
+            } else {
+                action = Action {
+                    cursor: tas.selected_frame(),
+                    kind: tas::ActionKind::Apply {
+                        pattern: pattern.clone(),
+                        previous: tas.movie().default_frame().to_vec(),
+                    },
+                }
             }
-            self.mode = Mode::Insert(pattern);
+            self.mode = Mode::Insert {
+                pattern,
+                action: Some(action),
+            };
         }
     }
 }

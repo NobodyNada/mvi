@@ -33,7 +33,9 @@ impl Keybinds {
             &mut config.insert_bindings,
             &mut self.insert_bindings,
             &|ctx: &Context| match &ctx.keybinds.mode {
-                Mode::Insert(pattern) | Mode::Replace(pattern) => pattern.clone(),
+                Mode::Insert { pattern, action: _ } | Mode::Replace { pattern, action: _ } => {
+                    pattern.clone()
+                }
                 _ => unreachable!(),
             },
         ));
@@ -110,7 +112,20 @@ impl Keybinds {
             "Normal mode",
             vec![(Key::Named(NamedKey::Escape), ModifiersState::empty())],
             |ctx, _| {
-                ctx.keybinds.mode = Mode::Normal { count: 0 };
+                let old_mode = std::mem::replace(&mut ctx.keybinds.mode, Mode::Normal { count: 0 });
+                match old_mode {
+                    Mode::Insert {
+                        action: Some(action),
+                        ..
+                    }
+                    | Mode::Replace {
+                        action: Some(action),
+                        ..
+                    } => {
+                        ctx.tas.push_repeatable(action);
+                    }
+                    _ => {}
+                }
                 ctx.tas.set_run_mode(tas::RunMode::Paused);
             },
         );
@@ -129,7 +144,7 @@ impl Keybinds {
             ],
             |ctx, _| {
                 ctx.tas.set_run_mode(tas::RunMode::Paused);
-                if let Mode::Insert(_) = &ctx.keybinds.mode {
+                if let Mode::Insert { .. } = &mut ctx.keybinds.mode {
                     ctx.tas.insert(
                         ctx.tas.selected_frame() + 1,
                         &ctx.tas.movie().default_frame().to_vec(),
@@ -137,8 +152,62 @@ impl Keybinds {
                 }
                 ctx.tas.select_next(1);
                 match &mut ctx.keybinds.mode {
-                    Mode::Insert(pattern) | Mode::Replace(pattern) => {
+                    Mode::Insert { pattern, action } => {
                         pattern.offset += 1;
+
+                        // If we have an apply action in insert mode, push it
+                        if let Some(Action {
+                            kind: tas::ActionKind::Apply { .. },
+                            ..
+                        }) = action
+                        {
+                            ctx.tas.push_repeatable(action.take().unwrap());
+                        }
+
+                        // If we have no action, create an empty insert action
+                        let action = action.get_or_insert(Action {
+                            cursor: ctx.tas.selected_frame(),
+                            kind: tas::ActionKind::Insert(Vec::new()),
+                        });
+
+                        let tas::ActionKind::Insert(frames) = &mut action.kind else {
+                            unreachable!("unexpected action kind");
+                        };
+                        let offset = frames.len();
+                        frames.extend_from_slice(ctx.tas.movie().default_frame());
+                        pattern.apply(ctx.tas.movie().input_ports(), &mut frames[offset..]);
+
+                        ctx.tas.set_input(&pattern);
+                    }
+
+                    Mode::Replace { pattern, action } => {
+                        pattern.offset += 1;
+
+                        // If we have no action, create an empty replace action
+                        let a = action.get_or_insert(Action {
+                            cursor: ctx.tas.selected_frame(),
+                            kind: tas::ActionKind::Apply {
+                                pattern: ctx.tas.movie().default_pattern(),
+                                previous: Vec::new(),
+                            },
+                        });
+
+                        let tas::ActionKind::Apply {
+                            pattern: p,
+                            previous,
+                        } = &mut a.kind
+                        else {
+                            unreachable!("unexpected action kind");
+                        };
+                        let old_len = previous.len();
+                        previous.extend_from_slice(ctx.tas.frame(ctx.tas.selected_frame()));
+                        p.expand(
+                            &ctx.tas.movie().input_ports(),
+                            (old_len / p.buf.frame_size + 1) as u32,
+                        );
+                        let buf = Rc::make_mut(&mut p.buf);
+                        pattern.apply(&ctx.tas.movie().input_ports(), &mut buf.data[old_len..]);
+
                         ctx.tas.set_input(&pattern);
                     }
                     _ => unreachable!(),
@@ -157,7 +226,8 @@ impl Keybinds {
                 if let tas::RunMode::Paused = ctx.tas.run_mode() {
                     ctx.tas.select_prev(1);
                     match &mut ctx.keybinds.mode {
-                        Mode::Insert(pattern) | Mode::Replace(pattern) => {
+                        Mode::Insert { pattern, action: _ }
+                        | Mode::Replace { pattern, action: _ } => {
                             if pattern.offset == 0 {
                                 pattern.offset = pattern.len() * 2 - 1;
                             } else {
@@ -165,6 +235,15 @@ impl Keybinds {
                             }
                             ctx.tas.set_input(&pattern);
                         }
+                        _ => unreachable!(),
+                    }
+                    match &mut ctx.keybinds.mode {
+                        Mode::Insert { action, .. } => {
+                            if let Some(action) = action.take() {
+                                ctx.tas.push_repeatable(action);
+                            }
+                        }
+                        Mode::Replace { .. } => {}
                         _ => unreachable!(),
                     }
                 }
@@ -240,6 +319,24 @@ impl Keybinds {
         register(&normal, "Scroll bottom", s("zb"), |ctx, _| {
             ctx.piano_roll
                 .set_scroll_lock(piano_roll::ScrollLock::Bottom)
+        });
+
+        register(&normal, "Undo", s("u"), |ctx, _| {
+            ctx.tas.set_run_mode(tas::RunMode::Paused);
+            ctx.tas.undo_latest();
+        });
+        register(
+            &normal,
+            "Redo",
+            vec![(c('r'), ModifiersState::CONTROL)],
+            |ctx, _| {
+                ctx.tas.set_run_mode(tas::RunMode::Paused);
+                ctx.tas.redo_latest();
+            },
+        );
+        register(&normal, "Repeat", s("."), |ctx, _| {
+            ctx.tas.set_run_mode(tas::RunMode::Paused);
+            ctx.tas.repeat();
         });
 
         // Initialize controller bindings.
