@@ -385,7 +385,7 @@ fn render_thread<E, R>(
                                 position.y + window_pos.y as f64,
                             );
                             let logical: LogicalPosition<f64> =
-                                physical.to_logical(viewport.dpi_scale as f64);
+                                physical.to_logical(window.scale_factor());
                             imgui
                                 .io_mut()
                                 .add_mouse_pos_event([logical.x as f32, logical.y as f32])
