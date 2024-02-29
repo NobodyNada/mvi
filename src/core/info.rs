@@ -7,12 +7,14 @@ use cfg_if::cfg_if;
 cfg_if! {
     if #[cfg(windows)] {
         const CORE_EXT: &str = "dll";
-        if #[cfg(target_arch = "x86")] {
-            const CORE_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86/latest";
-        } else if #[cfg(target_arch = "x86_64")] {
-            const CORE_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
-        } else {
-            #[error("unsupported architecture")]
+        cfg_if! {
+            if #[cfg(target_arch = "x86")] {
+                const CORE_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86/latest";
+            } else if #[cfg(target_arch = "x86_64")] {
+                const CORE_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
+            } else {
+                #[error("unsupported architecture")]
+            }
         }
     } else if #[cfg(target_os = "macos")] {
         const CORE_EXT: &str = "dylib";
@@ -26,11 +28,14 @@ cfg_if! {
             }
         }
     } else if #[cfg(target_os = "linux")] {
+        const CORE_EXT: &str = "so";
+        cfg_if! {
             if #[cfg(target_arch = "x86_64")] {
                 const CORE_URL: &str = "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
             } else {
                 #[error("unsupported architecture")]
             }
+        }
     } else {
         #[error("unsupported operating system")]
     }
