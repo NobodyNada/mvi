@@ -2,3 +2,4 @@
 /cores
 imgui.ini
 *.gputrace
+*.mvi
