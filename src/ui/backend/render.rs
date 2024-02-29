@@ -415,7 +415,7 @@ impl Renderer {
 
         // Create an image buffer in GPU memory, and upload it to the GPU.
         imgui.fonts().flags.insert(FontAtlasFlags::NO_BAKED_LINES);
-        let font_image = imgui.fonts().build_alpha8_texture();
+        let font_image = imgui.fonts().build_rgba32_texture();
         let font_staging_buffer = vk::buffer::Buffer::new_slice(
             context.memory_allocator().clone(),
             vk::buffer::BufferCreateInfo {
@@ -435,8 +435,8 @@ impl Renderer {
         let font_image = vk::image::Image::new(
             context.memory_allocator().clone(),
             vk::image::ImageCreateInfo {
-                format: vk::format::Format::R8_UNORM,
-                view_formats: vec![vk::format::Format::R8_UNORM],
+                format: vk::format::Format::R8G8B8A8_UNORM,
+                view_formats: vec![vk::format::Format::R8G8B8A8_UNORM],
                 extent: [font_image.width, font_image.height, 1],
                 usage: vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
                 ..Default::default()
@@ -453,15 +453,7 @@ impl Renderer {
             ),
         )?;
 
-        let create_info = vk::image::view::ImageViewCreateInfo {
-            component_mapping: vk::image::sampler::ComponentMapping {
-                r: vk::image::sampler::ComponentSwizzle::One,
-                g: vk::image::sampler::ComponentSwizzle::One,
-                b: vk::image::sampler::ComponentSwizzle::One,
-                a: vk::image::sampler::ComponentSwizzle::Red,
-            },
-            ..vk::image::view::ImageViewCreateInfo::from_image(&font_image)
-        };
+        let create_info = vk::image::view::ImageViewCreateInfo::from_image(&font_image);
         let font_image = vk::image::view::ImageView::new(font_image, create_info)?;
 
         // Create a sampler that describes how to access our image.

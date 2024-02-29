@@ -59,10 +59,6 @@ where
             flags: vk::instance::InstanceCreateFlags::ENUMERATE_PORTABILITY,
             ..Default::default()
         },
-        device_features: vk::device::Features {
-            image_view_format_swizzle: true,
-            ..Default::default()
-        },
 
         // Use our callback to print debug messages.
         debug_create_info: Some(
