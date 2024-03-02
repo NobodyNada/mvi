@@ -143,6 +143,7 @@ impl Keybinds {
                 vec![(Key::Named(NamedKey::ArrowDown), ModifiersState::empty())],
             ],
             |ctx, _| {
+                // TODO: perhaps down arrow should not insert in insert mode
                 ctx.tas.set_run_mode(tas::RunMode::Paused);
                 if let Mode::Insert { .. } = &mut ctx.keybinds.mode {
                     ctx.tas.insert(
@@ -238,12 +239,11 @@ impl Keybinds {
                         _ => unreachable!(),
                     }
                     match &mut ctx.keybinds.mode {
-                        Mode::Insert { action, .. } => {
+                        Mode::Insert { action, .. } | Mode::Replace { action, .. } => {
                             if let Some(action) = action.take() {
                                 ctx.tas.push_repeatable(action);
                             }
                         }
-                        Mode::Replace { .. } => {}
                         _ => unreachable!(),
                     }
                 }
@@ -279,6 +279,7 @@ impl Keybinds {
                 vec![(c('f'), ModifiersState::CONTROL)],
             ],
             |ctx, _| {
+                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_next(ctx.piano_roll.screen_size());
             },
         );
@@ -290,6 +291,7 @@ impl Keybinds {
                 vec![(c('b'), ModifiersState::CONTROL)],
             ],
             |ctx, _| {
+                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_prev(ctx.piano_roll.screen_size());
             },
         );
@@ -298,6 +300,7 @@ impl Keybinds {
             "Half-page down",
             vec![(c('d'), ModifiersState::CONTROL)],
             |ctx, _| {
+                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_next(ctx.piano_roll.screen_size() / 2);
             },
         );
@@ -306,6 +309,7 @@ impl Keybinds {
             "Half-page up",
             vec![(c('u'), ModifiersState::CONTROL)],
             |ctx, _| {
+                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_prev(ctx.piano_roll.screen_size() / 2);
             },
         );
