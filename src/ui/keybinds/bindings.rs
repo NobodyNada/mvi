@@ -279,7 +279,6 @@ impl Keybinds {
                 vec![(c('f'), ModifiersState::CONTROL)],
             ],
             |ctx, _| {
-                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_next(ctx.piano_roll.screen_size());
             },
         );
@@ -291,7 +290,6 @@ impl Keybinds {
                 vec![(c('b'), ModifiersState::CONTROL)],
             ],
             |ctx, _| {
-                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_prev(ctx.piano_roll.screen_size());
             },
         );
@@ -300,7 +298,6 @@ impl Keybinds {
             "Half-page down",
             vec![(c('d'), ModifiersState::CONTROL)],
             |ctx, _| {
-                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_next(ctx.piano_roll.screen_size() / 2);
             },
         );
@@ -309,7 +306,6 @@ impl Keybinds {
             "Half-page up",
             vec![(c('u'), ModifiersState::CONTROL)],
             |ctx, _| {
-                // TODO: logic around invalidating actions in insert/replace mode
                 ctx.tas.select_prev(ctx.piano_roll.screen_size() / 2);
             },
         );

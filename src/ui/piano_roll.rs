@@ -231,7 +231,6 @@ impl PianoRoll {
                                     && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                             {
                                 self.drag_mode = Some(DragMode::Selection);
-                                // TODO: logic around invalidating actions in insert/replace mode
                                 tas.select(row);
                             }
 

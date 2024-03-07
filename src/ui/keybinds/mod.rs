@@ -225,29 +225,33 @@ impl Keybinds {
                 _,
                 _,
             ) => {
+                let mut input_changed = false;
                 if modifiers.alt_key() {
                     // Toggle autofire
                     *pattern.autofire_mut(tas.movie().input_ports(), port, index, id) ^= true;
-                    tas.set_input(pattern);
+                    input_changed = true;
                 } else {
                     if pattern.autofire(tas.movie().input_ports(), port, index, id) {
+                        // Disable autofire
                         *pattern.autofire_mut(tas.movie().input_ports(), port, index, id) = false;
                     }
-                    // Toggle autohold
                     if modifiers.shift_key() {
+                        // Toggle autohold
                         *pattern.autohold_mut(tas.movie().input_ports(), port, index, id) ^= true;
-                        // we don't need to call tas.set_input because TAS doesn't care about
-                        // autohold, only us
                     } else if pattern.autohold(tas.movie().input_ports(), port, index, id) {
+                        // Disable autohold
                         *pattern.autohold_mut(tas.movie().input_ports(), port, index, id) = false;
                     }
                     if pattern.read(tas.movie().input_ports(), port, 0, id) != 1 {
                         pattern.write(&tas.movie().input_ports(), port, index, id, 1);
-                        tas.set_input(pattern);
+                        input_changed = true;
                     }
                 }
-                if let tas::RunMode::Paused = tas.run_mode() {
-                    Self::write_input_change_to_action(tas, pattern, action)
+                if input_changed {
+                    if let tas::RunMode::Paused = tas.run_mode() {
+                        Self::write_input_change_to_action(tas, pattern, action)
+                    }
+                    tas.set_input(pattern);
                 }
                 self.reset_bindings();
                 return;
@@ -309,7 +313,34 @@ impl Keybinds {
         }
     }
 
-    fn write_input_change_to_action(tas: &Tas, pattern: &Pattern, action: &mut Option<Action>) {
+    fn write_input_change_to_action(tas: &mut Tas, pattern: &Pattern, action: &mut Option<Action>) {
+        // If the cursor has moved around, push the old action and start a new.
+        let should_invalidate = match action {
+            None => false,
+            Some(Action {
+                kind: tas::ActionKind::Delete(_),
+                ..
+            }) => unreachable!("unexpected action kind"),
+            Some(Action {
+                cursor,
+                kind: tas::ActionKind::Insert(frames),
+            }) => {
+                tas.selected_frame() != *cursor + (frames.len() / pattern.buf.frame_size) as u32 - 1
+            }
+            Some(Action {
+                cursor,
+                kind: tas::ActionKind::Apply { previous, .. },
+            }) => {
+                tas.selected_frame()
+                    != *cursor + (previous.len() / pattern.buf.frame_size) as u32 - 1
+            }
+        };
+        if should_invalidate {
+            if let Some(action) = action.take() {
+                tas.push_undo(action);
+            }
+        }
+
         let action = action.get_or_insert_with(|| Action {
             cursor: tas.selected_frame(),
             kind: tas::ActionKind::Apply {
@@ -319,10 +350,6 @@ impl Keybinds {
         });
         match &mut action.kind {
             tas::ActionKind::Insert(frames) => {
-                assert_eq!(
-                    action.cursor + (frames.len() / pattern.buf.frame_size) as u32 - 1,
-                    tas.selected_frame()
-                );
                 if frames.len() >= pattern.buf.frame_size {
                     let len = frames.len();
                     Pattern {
@@ -336,14 +363,7 @@ impl Keybinds {
                 }
             }
             tas::ActionKind::Delete(_) => unreachable!("unexpected action kind"),
-            tas::ActionKind::Apply {
-                pattern: p,
-                previous,
-            } => {
-                assert_eq!(
-                    action.cursor + (previous.len() / pattern.buf.frame_size) as u32 - 1,
-                    tas.selected_frame()
-                );
+            tas::ActionKind::Apply { pattern: p, .. } => {
                 p.expand(
                     &tas.movie().input_ports(),
                     (tas.selected_frame() - action.cursor) + 1,
