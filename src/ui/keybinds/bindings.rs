@@ -249,6 +249,11 @@ impl Keybinds {
                 }
             },
         );
+        register(&normal, "Delete", s("x"), |ctx, count| {
+            let start = ctx.tas.selected_frame();
+            let end = (start + count.max(1)).min(ctx.tas.movie().len());
+            ctx.tas.delete(start..end);
+        });
         register_multiple(
             &normal,
             "Next frame",

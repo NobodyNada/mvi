@@ -402,6 +402,42 @@ impl Tas {
         );
     }
 
+    pub fn delete(&mut self, frames: impl std::ops::RangeBounds<u32>) {
+        let size = self.movie().frame_size();
+        let range = (
+            match frames.start_bound() {
+                std::ops::Bound::Unbounded => std::ops::Bound::Unbounded,
+                std::ops::Bound::Included(frame) => {
+                    std::ops::Bound::Included(*frame as usize * size)
+                }
+                std::ops::Bound::Excluded(frame) => {
+                    std::ops::Bound::Excluded(*frame as usize * size + (size - 1))
+                }
+            },
+            match frames.end_bound() {
+                std::ops::Bound::Unbounded => std::ops::Bound::Unbounded,
+                std::ops::Bound::Included(frame) => {
+                    std::ops::Bound::Included(*frame as usize * size + (size - 1))
+                }
+                std::ops::Bound::Excluded(frame) => {
+                    std::ops::Bound::Excluded(*frame as usize * size)
+                }
+            },
+        );
+        let start = match frames.start_bound() {
+            std::ops::Bound::Unbounded => 0,
+            std::ops::Bound::Excluded(frame) => frame + 1,
+            std::ops::Bound::Included(frame) => *frame,
+        };
+
+        let action = Action {
+            cursor: start,
+            kind: ActionKind::Delete(self.movie.data.drain(range).collect()),
+        };
+        self.push_undo(action);
+        self.invalidate(start);
+    }
+
     pub fn seek_to(&mut self, frame: u32) {
         if self.playback_cursor != frame {
             self.playback_cursor = frame;
