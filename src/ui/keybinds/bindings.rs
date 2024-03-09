@@ -135,85 +135,101 @@ impl Keybinds {
             vec![(Key::Named(NamedKey::Space), ModifiersState::empty())],
             |ctx, _| ctx.keybinds.toggle_playback(ctx.tas),
         );
+
+        fn next_frame(ctx: Context<'_>, should_insert: bool) {
+            ctx.tas.set_run_mode(tas::RunMode::Paused);
+            if should_insert {
+                ctx.tas.insert(
+                    ctx.tas.selected_frame() + 1,
+                    &ctx.tas.movie().default_frame().to_vec(),
+                );
+            }
+            ctx.tas.select_next(1);
+            let (Mode::Insert { pattern, action } | Mode::Replace { pattern, action }) =
+                &mut ctx.keybinds.mode
+            else {
+                unreachable!()
+            };
+            if should_insert {
+                pattern.offset += 1;
+
+                // If we have an apply action in insert mode, push it
+                if let Some(Action {
+                    kind: tas::ActionKind::Apply { .. },
+                    ..
+                }) = action
+                {
+                    ctx.tas.push_repeatable(action.take().unwrap());
+                }
+
+                // If we have no action, create an empty insert action
+                let action = action.get_or_insert(Action {
+                    cursor: ctx.tas.selected_frame(),
+                    kind: tas::ActionKind::Insert(Vec::new()),
+                });
+
+                let tas::ActionKind::Insert(frames) = &mut action.kind else {
+                    unreachable!("unexpected action kind");
+                };
+                let offset = frames.len();
+                frames.extend_from_slice(ctx.tas.movie().default_frame());
+                pattern.apply(ctx.tas.movie().input_ports(), &mut frames[offset..]);
+
+                ctx.tas.set_input(&pattern);
+            } else {
+                pattern.offset += 1;
+
+                // If we have an insert action in replace mode, push it
+                if let Some(Action {
+                    kind: tas::ActionKind::Insert { .. },
+                    ..
+                }) = action
+                {
+                    ctx.tas.push_repeatable(action.take().unwrap());
+                }
+
+                // If we have no action, create an empty replace action
+                let a = action.get_or_insert(Action {
+                    cursor: ctx.tas.selected_frame(),
+                    kind: tas::ActionKind::Apply {
+                        pattern: ctx.tas.movie().default_pattern(),
+                        previous: Vec::new(),
+                    },
+                });
+
+                let tas::ActionKind::Apply {
+                    pattern: p,
+                    previous,
+                } = &mut a.kind
+                else {
+                    unreachable!("unexpected action kind");
+                };
+                let old_len = previous.len();
+                previous.extend_from_slice(ctx.tas.frame(ctx.tas.selected_frame()));
+                p.expand(
+                    &ctx.tas.movie().input_ports(),
+                    (old_len / p.buf.frame_size + 1) as u32,
+                );
+                let buf = Rc::make_mut(&mut p.buf);
+                pattern.apply(&ctx.tas.movie().input_ports(), &mut buf.data[old_len..]);
+
+                ctx.tas.set_input(&pattern);
+            }
+        }
         register_multiple(
             &insert,
-            "Next frame",
-            vec![
-                vec![(Key::Named(NamedKey::Enter), ModifiersState::empty())],
-                vec![(Key::Named(NamedKey::ArrowDown), ModifiersState::empty())],
-            ],
-            |ctx, _| {
-                // TODO: perhaps down arrow should not insert in insert mode
-                ctx.tas.set_run_mode(tas::RunMode::Paused);
-                if let Mode::Insert { .. } = &mut ctx.keybinds.mode {
-                    ctx.tas.insert(
-                        ctx.tas.selected_frame() + 1,
-                        &ctx.tas.movie().default_frame().to_vec(),
-                    );
-                }
-                ctx.tas.select_next(1);
-                match &mut ctx.keybinds.mode {
-                    Mode::Insert { pattern, action } => {
-                        pattern.offset += 1;
-
-                        // If we have an apply action in insert mode, push it
-                        if let Some(Action {
-                            kind: tas::ActionKind::Apply { .. },
-                            ..
-                        }) = action
-                        {
-                            ctx.tas.push_repeatable(action.take().unwrap());
-                        }
-
-                        // If we have no action, create an empty insert action
-                        let action = action.get_or_insert(Action {
-                            cursor: ctx.tas.selected_frame(),
-                            kind: tas::ActionKind::Insert(Vec::new()),
-                        });
-
-                        let tas::ActionKind::Insert(frames) = &mut action.kind else {
-                            unreachable!("unexpected action kind");
-                        };
-                        let offset = frames.len();
-                        frames.extend_from_slice(ctx.tas.movie().default_frame());
-                        pattern.apply(ctx.tas.movie().input_ports(), &mut frames[offset..]);
-
-                        ctx.tas.set_input(&pattern);
-                    }
-
-                    Mode::Replace { pattern, action } => {
-                        pattern.offset += 1;
-
-                        // If we have no action, create an empty replace action
-                        let a = action.get_or_insert(Action {
-                            cursor: ctx.tas.selected_frame(),
-                            kind: tas::ActionKind::Apply {
-                                pattern: ctx.tas.movie().default_pattern(),
-                                previous: Vec::new(),
-                            },
-                        });
-
-                        let tas::ActionKind::Apply {
-                            pattern: p,
-                            previous,
-                        } = &mut a.kind
-                        else {
-                            unreachable!("unexpected action kind");
-                        };
-                        let old_len = previous.len();
-                        previous.extend_from_slice(ctx.tas.frame(ctx.tas.selected_frame()));
-                        p.expand(
-                            &ctx.tas.movie().input_ports(),
-                            (old_len / p.buf.frame_size + 1) as u32,
-                        );
-                        let buf = Rc::make_mut(&mut p.buf);
-                        pattern.apply(&ctx.tas.movie().input_ports(), &mut buf.data[old_len..]);
-
-                        ctx.tas.set_input(&pattern);
-                    }
-                    _ => unreachable!(),
-                }
-            },
+            "Next frame (replace)",
+            vec![vec![(
+                Key::Named(NamedKey::ArrowDown),
+                ModifiersState::empty(),
+            )]],
+            |ctx, _| next_frame(ctx, false),
+        );
+        register_multiple(
+            &insert,
+            "Next frame (insert)",
+            vec![vec![(Key::Named(NamedKey::Enter), ModifiersState::empty())]],
+            |ctx, _| next_frame(ctx, true),
         );
         register_multiple(
             &insert,
