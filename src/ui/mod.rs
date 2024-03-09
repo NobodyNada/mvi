@@ -332,7 +332,7 @@ impl Ui {
                     .max_by(|(w1, _), (w2, _)| w1.partial_cmp(w2).unwrap())
                     .unwrap();
 
-                    let (frame, framebuffer) = self.run_frame(renderer).unwrap();
+                    let (_, framebuffer) = self.run_frame(renderer).unwrap();
 
                     imgui::Image::new(framebuffer.texture.id, [w, h]).build(ui)
                 });
