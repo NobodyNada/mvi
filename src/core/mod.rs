@@ -446,9 +446,7 @@ unsafe extern "C" fn input_poll_callback() {}
 
 unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 {
     let core = lock();
-    if core.input.is_null() {
-        return 0;
-    }
+    assert!(!core.input.is_null());
     assert!(!core.input_ports.is_null());
 
     let input = &*core.input;

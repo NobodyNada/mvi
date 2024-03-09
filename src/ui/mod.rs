@@ -334,11 +334,7 @@ impl Ui {
 
                     let (frame, framebuffer) = self.run_frame(renderer).unwrap();
 
-                    let crop_x = frame.width as f32 / av.geometry.max_width as f32;
-                    let crop_y = frame.height as f32 / av.geometry.max_height as f32;
-                    imgui::Image::new(framebuffer.texture.id, [w, h])
-                        .uv1([crop_x, crop_y])
-                        .build(ui)
+                    imgui::Image::new(framebuffer.texture.id, [w, h]).build(ui)
                 });
 
             self.piano_roll
@@ -440,6 +436,12 @@ impl Ui {
             }
         });
 
+        if let Some(framebuffer) = &self.framebuffer {
+            if framebuffer.width != frame.width || framebuffer.height != frame.height {
+                self.framebuffer = None;
+            }
+        }
+
         // Create the framebuffer, if it does not already exist
         let framebuffer = self.framebuffer.get_or_insert_with(|| {
             let buffer: vk::buffer::Subbuffer<[[u8; 4]]> = vk::buffer::Buffer::new_slice(
@@ -462,7 +464,7 @@ impl Ui {
                 vk::image::ImageCreateInfo {
                     format: vk::format::Format::R8G8B8A8_UNORM,
                     view_formats: vec![vk::format::Format::R8G8B8A8_UNORM],
-                    extent: [av.geometry.max_width, av.geometry.max_height, 1],
+                    extent: [frame.width as u32, frame.height as u32, 1],
                     usage: vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
                     ..Default::default()
                 },
@@ -488,6 +490,8 @@ impl Ui {
                 buffer,
                 image,
                 texture,
+                width: frame.width,
+                height: frame.height,
             }
         });
 
@@ -538,4 +542,6 @@ struct Framebuffer {
     buffer: vk::buffer::Subbuffer<[[u8; 4]]>,
     image: Arc<vk::image::Image>,
     texture: Arc<backend::render::Texture>,
+    width: usize,
+    height: usize,
 }
