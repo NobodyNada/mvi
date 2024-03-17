@@ -435,8 +435,23 @@ impl Keybinds {
         tas.set_run_mode(mode);
     }
 
-    fn start_insert(&mut self, tas: &mut Tas, is_replace: bool, is_append: bool) {
+    fn start_insert(&mut self, tas: &mut Tas, is_replace: bool, is_append: bool, autohold: bool) {
         let mut pattern = tas.movie().default_pattern();
+        if autohold {
+            Rc::make_mut(&mut pattern.buf)
+                .data
+                .copy_from_slice(tas.frame(tas.selected_frame()));
+            let input_ports = tas.movie().input_ports();
+            for (port, device) in input_ports.iter().enumerate() {
+                for index in 0..device.num_controllers() {
+                    for id in 0..device.num_inputs(index) {
+                        if device.read(tas.movie().frame(tas.selected_frame()), index, id) != 0 {
+                            *pattern.autohold_mut(input_ports, port as u32, index, id) = true;
+                        }
+                    }
+                }
+            }
+        }
         let mode = match tas.run_mode() {
             tas::RunMode::Paused => tas::RunMode::Paused,
             tas::RunMode::Running {
@@ -450,7 +465,7 @@ impl Keybinds {
                         action: Action {
                             cursor: tas.playback_frame() + 1,
                             kind: tas::ActionKind::Apply {
-                                pattern: tas.movie().default_pattern(),
+                                pattern: pattern.clone(),
                                 previous: Vec::new(),
                             },
                         },
@@ -490,11 +505,12 @@ impl Keybinds {
                     tas.select_next(1);
                 } else {
                     tas.insert_blank(tas.selected_frame(), 1);
+                    pattern = tas.apply(&pattern, tas.selected_frame(), 1);
                 }
 
                 action = Action {
                     cursor: tas.selected_frame(),
-                    kind: tas::ActionKind::Insert(tas.movie().default_frame().to_vec()),
+                    kind: tas::ActionKind::Insert(tas.movie().frame(tas.selected_frame()).to_vec()),
                 };
             } else {
                 action = Action {

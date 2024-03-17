@@ -94,17 +94,33 @@ impl Keybinds {
         }
 
         register(&normal, "Insert", s("i"), |ctx, _| {
-            ctx.keybinds.start_insert(ctx.tas, false, false);
+            ctx.keybinds.start_insert(ctx.tas, false, false, false);
         });
         register(&normal, "Append", s("a"), |ctx, _| {
-            ctx.keybinds.start_insert(ctx.tas, false, true);
+            ctx.keybinds.start_insert(ctx.tas, false, true, false);
         });
+        register(
+            &normal,
+            "Insert (autohold)",
+            vec![(c('i'), ModifiersState::SHIFT)],
+            |ctx, _| {
+                ctx.keybinds.start_insert(ctx.tas, false, false, true);
+            },
+        );
+        register(
+            &normal,
+            "Append (autohold)",
+            vec![(c('a'), ModifiersState::SHIFT)],
+            |ctx, _| {
+                ctx.keybinds.start_insert(ctx.tas, false, true, true);
+            },
+        );
         register(
             &normal,
             "Replace",
             vec![(c('r'), ModifiersState::SHIFT)],
             |ctx, _| {
-                ctx.keybinds.start_insert(ctx.tas, true, false);
+                ctx.keybinds.start_insert(ctx.tas, true, false, false);
             },
         );
         register(
