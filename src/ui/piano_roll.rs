@@ -31,7 +31,12 @@ pub enum ScrollLock {
 pub enum DragMode {
     Playback,
     Selection,
-    Input { index: u32, start: u32, end: u32 },
+    Input {
+        index: u32,
+        start: u32,
+        end: u32,
+        autofire: bool,
+    },
 }
 
 impl ScrollLock {
@@ -78,7 +83,12 @@ impl PianoRoll {
     pub fn draw(&mut self, ui: &Ui, tas: &mut Tas, keybinds: &keybinds::Keybinds) {
         if !ui.is_mouse_down(imgui::MouseButton::Left) {
             match self.drag_mode.take() {
-                Some(DragMode::Input { index, start, end }) => {
+                Some(DragMode::Input {
+                    index,
+                    start,
+                    end,
+                    autofire,
+                }) => {
                     // Create an undo action toggling all inputs
                     // between 'start' and 'end' inclusive.
                     let len = start.abs_diff(end) + 1;
@@ -89,6 +99,9 @@ impl PianoRoll {
                     let input_port = tas.movie().input_ports()[0];
 
                     for i in start.min(end)..=start.max(end) {
+                        if autofire && (i.abs_diff(start)) % 2 != 0 {
+                            continue;
+                        }
                         let frame = tas.movie().frame(i);
                         let frame_start = previous.len();
                         pattern_buf.extend_from_slice(frame);
@@ -132,6 +145,9 @@ impl PianoRoll {
                 _ => {}
             }
         }
+
+        let autofire_pressed =
+            ui.is_key_down(imgui::Key::LeftAlt) || ui.is_key_down(imgui::Key::RightAlt);
 
         let padding = unsafe { ui.style().window_padding };
         let padding_token = ui.push_style_var(imgui::StyleVar::WindowPadding([0., 0.]));
@@ -268,11 +284,16 @@ impl PianoRoll {
                                         index: index as u32,
                                         start: row,
                                         end: row,
+                                        autofire: autofire_pressed,
                                     });
                                     let frame = &mut tas.frame_mut(row)[0..input_port.frame_size()];
                                     input_port.write(frame, 0, index as u32, !pressed as i16);
-                                } else if let Some(DragMode::Input { index, start, end }) =
-                                    &mut self.drag_mode
+                                } else if let Some(DragMode::Input {
+                                    index,
+                                    start,
+                                    end,
+                                    autofire,
+                                }) = &mut self.drag_mode
                                 {
                                     if ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                                         && row != *end
@@ -341,7 +362,9 @@ impl PianoRoll {
                                             }
                                         };
                                         for i in min..max {
-                                            if i == *start {
+                                            if i == *start
+                                                || (*autofire && (i.abs_diff(*start)) % 2 != 0)
+                                            {
                                                 continue;
                                             }
                                             let frame =
@@ -354,6 +377,22 @@ impl PianoRoll {
                                             );
                                         }
                                         *end = row;
+                                    }
+
+                                    if *autofire != autofire_pressed {
+                                        *autofire = autofire_pressed;
+                                        for i in (*start).min(*end)..=(*start).max(*end) {
+                                            if i.abs_diff(*start) % 2 != 0 {
+                                                let frame = &mut tas.frame_mut(i)
+                                                    [0..input_port.frame_size()];
+                                                input_port.write(
+                                                    frame,
+                                                    0,
+                                                    *index,
+                                                    (input_port.read(frame, 0, *index) == 0) as i16,
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
