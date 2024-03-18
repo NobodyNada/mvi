@@ -157,6 +157,7 @@ impl PianoRoll {
                 std::mem::drop(padding_token);
                 ui.child_window("piano_roll_inputs")
                     .size([0., -ui.text_line_height_with_spacing() - padding[1]])
+                    .flags(imgui::WindowFlags::NO_SCROLL_WITH_MOUSE)
                     .build(|| {
                         let rows = tas.movie().len();
 
@@ -172,6 +173,13 @@ impl PianoRoll {
                                         * ui.text_line_height_with_spacing() as f64)
                                         as f32,
                                 self.scroll_lock.ratio(),
+                            );
+                        }
+
+                        if ui.is_window_hovered() {
+                            ui.set_scroll_y(
+                                ui.scroll_y()
+                                    - ui.io().mouse_wheel * ui.text_line_height_with_spacing() * 3.,
                             );
                         }
 
