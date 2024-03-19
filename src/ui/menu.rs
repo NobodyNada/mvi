@@ -7,7 +7,6 @@ use super::*;
 
 pub(super) struct CoreSelector {
     extension: Option<String>,
-    show_experimental: bool,
     show_non_matching: bool,
     selected_core_id: Option<String>,
     downloaded_cores: HashSet<String>,
@@ -179,8 +178,7 @@ impl Ui {
             {
                 if let Some(_token) = ui.begin_table(
                     "Available cores",
-                    2 + core_selector.show_experimental as usize
-                        + core_selector.show_non_matching as usize,
+                    2 + core_selector.show_non_matching as usize,
                 ) {
                     ui.table_setup_column("Core Name");
                     ui.table_setup_column_with(imgui::TableColumnSetup {
@@ -189,14 +187,6 @@ impl Ui {
                         init_width_or_weight: ui.calc_text_size("Downloaded")[0],
                         ..Default::default()
                     });
-                    if core_selector.show_experimental {
-                        ui.table_setup_column_with(imgui::TableColumnSetup {
-                            name: "Stable",
-                            flags: imgui::TableColumnFlags::WIDTH_FIXED,
-                            init_width_or_weight: ui.calc_text_size("Stable")[0],
-                            ..Default::default()
-                        });
-                    }
                     if core_selector.show_non_matching {
                         ui.table_setup_column_with(imgui::TableColumnSetup {
                             name: "Supports ROM",
@@ -215,9 +205,6 @@ impl Ui {
                             .unwrap_or(true);
 
                         if !supports_rom && !core_selector.show_non_matching {
-                            continue;
-                        }
-                        if core.experimental && !core_selector.show_experimental {
                             continue;
                         }
 
@@ -245,13 +232,6 @@ impl Ui {
                             ui.text("Yes")
                         }
 
-                        if core_selector.show_experimental {
-                            ui.table_next_column();
-                            if !core.experimental {
-                                ui.text("Yes");
-                            }
-                        }
-
                         if core_selector.show_non_matching {
                             ui.table_next_column();
                             if supports_rom {
@@ -266,10 +246,6 @@ impl Ui {
 
             ui.new_line();
 
-            ui.checkbox(
-                "Show experimental cores",
-                &mut core_selector.show_experimental,
-            );
             if let Some(extension) = &core_selector.extension {
                 ui.checkbox(
                     format!("Show cores that don't support the selected ROM (\".{extension}\")"),
@@ -303,7 +279,6 @@ impl Ui {
     ) -> Result<(), core::info::Error> {
         self.core_selector = Some(CoreSelector {
             extension,
-            show_experimental: false,
             show_non_matching: false,
             selected_core_id: None,
             downloaded_cores: core::info::CoreDb::find_installed_core_ids()?,
@@ -334,13 +309,14 @@ impl Ui {
         });
 
         let id = id.to_string();
-        self.tokio.spawn(async move {
-            tx.try_send((
-                core::info::CoreDb::download_core(id, Arc::downgrade(&progress), false).await,
-                Box::new(callback),
-            ))
-            .unwrap()
-        });
+        let download =
+            self.core_db
+                .as_ref()
+                .unwrap()
+                .download_core(id, Arc::downgrade(&progress), false);
+
+        self.tokio
+            .spawn(async move { tx.try_send((download.await, Box::new(callback))).unwrap() });
     }
 
     // Opening Movies
