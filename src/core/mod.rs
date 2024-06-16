@@ -4,7 +4,6 @@ use sha2::Digest;
 use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
-    os::unix::ffi::OsStrExt,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex, RwLock,
@@ -93,7 +92,7 @@ impl Core {
 
             let game_info = if system_info.need_fullpath {
                 retro_game_info {
-                    path: game_path.as_os_str().as_bytes().as_ptr().cast(),
+                    path: game_path.as_os_str().as_encoded_bytes().as_ptr().cast(),
                     data: std::ptr::null(),
                     size: 0,
                     meta: std::ptr::null(),
