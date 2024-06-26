@@ -30,6 +30,10 @@ pub struct MovieFile {
     /// The attached controllers.
     pub input_devices: Vec<tas::input::InputPort>,
 
+    /// The number of rerecords.
+    #[serde(default)]
+    pub rerecords: u32,
+
     /// The input frames, compressed with zlib. The uncompressed size of each frame will depend on
     /// the selected input_devices.
     pub inputs: Vec<u8>,
@@ -47,6 +51,7 @@ impl MovieFile {
             rom_filename: movie.rom_filename.clone(),
             rom_sha256: movie.rom_sha256,
             input_devices: movie.input_ports.clone(),
+            rerecords: movie.rerecords,
             inputs,
         }
     }

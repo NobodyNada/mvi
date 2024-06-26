@@ -197,8 +197,38 @@ impl Greenzone {
     }
 
     /// Invalidates all states after the given frame.
-    pub fn invalidate(&mut self, after: u32) {
-        self.push(Operation::Invalidate { after })
+    /// Returns true if any states were actually discarded by this operation.
+    pub fn invalidate(&mut self, after: u32) -> bool {
+        // Check to see if this operation will discard any states.
+        let g = self.g.lock().unwrap();
+
+        // Check the btrees first.
+        let earliest_full = g.full_states.range((after + 1)..).next().map(|s| *s.0);
+        let earliest_delta = g.delta_states.range((after + 1)..).next().map(|s| *s.0);
+        let mut earliest = earliest_full
+            .zip(earliest_delta)
+            .map(|(f, d)| f.min(d))
+            .or(earliest_full)
+            .or(earliest_delta);
+
+        // Check the mailbox to see if any pending operations change the result.
+        for op in &g.pending {
+            match op {
+                Operation::Save(f, _)
+                    if *f > after && (earliest.is_none() || *f < earliest.unwrap()) =>
+                {
+                    earliest = Some(*f)
+                }
+                Operation::Invalidate { after } if earliest.is_some_and(|e| e > *after) => {
+                    earliest = None
+                }
+                _ => {}
+            }
+        }
+        std::mem::drop(g);
+
+        self.push(Operation::Invalidate { after });
+        earliest.is_some()
     }
 
     /// Inserts a frame in the greenzone

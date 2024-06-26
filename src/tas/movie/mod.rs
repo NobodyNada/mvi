@@ -23,6 +23,7 @@ pub struct Movie {
     pub core_id: String,
     pub rom_filename: String,
     pub rom_sha256: [u8; 32],
+    pub rerecords: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +77,7 @@ impl Movie {
             rom_path,
             rom_sha256,
             core_id,
+            rerecords: 0,
         }
     }
 
@@ -113,6 +115,7 @@ impl Movie {
             rom_path,
             rom_sha256,
             core_id,
+            rerecords: file.rerecords,
         })
     }
 

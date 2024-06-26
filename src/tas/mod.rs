@@ -32,6 +32,10 @@ pub struct Tas {
     undo_history: Vec<Action>,
     undo_index: usize,
     repeatable_action: Option<Action>,
+
+    /// The earliest frame that was recorded and then invalidated.
+    /// If we record over this frame, that's a rerecord.
+    earliest_invalidated_frame: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -114,6 +118,7 @@ impl Tas {
             undo_history: Vec::new(),
             undo_index: 0,
             repeatable_action: None,
+            earliest_invalidated_frame: None,
 
             movie,
             core,
@@ -147,6 +152,7 @@ impl Tas {
             undo_history: Vec::new(),
             undo_index: 0,
             repeatable_action: None,
+            earliest_invalidated_frame: None,
 
             movie,
             core,
@@ -173,6 +179,14 @@ impl Tas {
         &mut self,
         audio_callback: &mut impl FnMut(&[core::AudioFrame]),
     ) -> &core::Frame {
+        if self
+            .earliest_invalidated_frame
+            .is_some_and(|e| self.next_emulator_frame > e)
+        {
+            println!("rerecord");
+            self.movie.rerecords += 1;
+            self.earliest_invalidated_frame = None;
+        }
         let frame = if self.next_emulator_frame < self.movie.len() {
             self.movie.frame(self.next_emulator_frame)
         } else {
@@ -349,7 +363,15 @@ impl Tas {
     /// In other words: the savestate at the beginning of this frame is valid, but this frame's
     /// input may have changed.
     pub fn invalidate(&mut self, after: u32) {
-        self.movie.greenzone.invalidate(after);
+        let invalidated = self.movie.greenzone.invalidate(after);
+        if invalidated {
+            if self.earliest_invalidated_frame.is_none()
+                || self.earliest_invalidated_frame.unwrap() > after
+            {
+                self.earliest_invalidated_frame = Some(after);
+            }
+        }
+
         if self.next_emulator_frame > after {
             let (f, state) = self.movie.greenzone.restore(after);
             self.next_emulator_frame = f;
