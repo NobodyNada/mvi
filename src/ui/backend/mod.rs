@@ -292,7 +292,6 @@ fn render_thread<E, R>(
                 }
                 ViewportEvent::SetFocus(id) => viewport_windows[&id].0.focus_window(),
                 ViewportEvent::SetTitle(id, title) => viewport_windows[&id].0.set_title(&title),
-                ViewportEvent::SetAlpha(_, _) => {}
             }
         }
 
@@ -481,7 +480,6 @@ enum ViewportEvent {
     SetSize(Id, [f32; 2]),
     SetFocus(Id),
     SetTitle(Id, String),
-    SetAlpha(Id, f32),
 }
 
 impl ViewportBackend {
@@ -575,8 +573,8 @@ impl PlatformViewportBackend for ViewportBackend {
         self.event(ViewportEvent::SetTitle(viewport.id, title.to_owned()));
     }
 
-    fn set_window_alpha(&mut self, viewport: &mut imgui::Viewport, alpha: f32) {
-        self.event(ViewportEvent::SetAlpha(viewport.id, alpha));
+    fn set_window_alpha(&mut self, _viewport: &mut imgui::Viewport, _alpha: f32) {
+        // winit does not support this
     }
 
     fn update_window(&mut self, _viewport: &mut imgui::Viewport) {}
