@@ -733,8 +733,14 @@ impl Target {
         image_extent[0] = image_extent[0].max(1);
         image_extent[1] = image_extent[1].max(1);
 
+        let mut min_image_count = 3;
+        min_image_count = min_image_count.max(surface_caps.min_image_count);
+        if let Some(max_image_count) = surface_caps.max_image_count {
+            min_image_count = min_image_count.min(max_image_count);
+        }
+
         let swapchain_info = vk::swapchain::SwapchainCreateInfo {
-            min_image_count: surface_caps.min_image_count,
+            min_image_count,
             image_format: renderer.color_format,
             image_color_space: vk::swapchain::ColorSpace::SrgbNonLinear,
             image_usage: vk::image::ImageUsage::COLOR_ATTACHMENT,
