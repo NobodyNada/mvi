@@ -278,16 +278,16 @@ impl Tas {
                             };
                             frames.extend_from_slice(self.frame(self.playback_cursor + 1));
                         }
-                        RecordMode::Overwrite { pattern: _, action } => {
+                        RecordMode::Overwrite { pattern, action } => {
+                            // Apply the pattern to the current frame.
+                            *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
+
                             // Update the undo history.
                             let ActionKind::Apply { pattern, previous } = &mut action.kind else {
                                 unreachable!("unexpected action kind");
                             };
                             let old_len = previous.len();
                             previous.extend_from_slice(self.frame(self.playback_cursor + 1));
-
-                            // Apply the pattern to the current frame.
-                            *pattern = self.apply(pattern, self.playback_cursor + 1, 1);
 
                             pattern.expand(
                                 self.movie().input_ports(),
