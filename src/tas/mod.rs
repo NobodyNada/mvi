@@ -195,7 +195,6 @@ impl Tas {
             .earliest_invalidated_frame
             .is_some_and(|e| self.next_emulator_frame > e)
         {
-            println!("rerecord");
             self.movie.rerecords += 1;
             self.earliest_invalidated_frame = None;
         }
