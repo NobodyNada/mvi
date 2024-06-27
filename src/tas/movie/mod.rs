@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 use crate::core;
 
@@ -24,6 +25,7 @@ pub struct Movie {
     pub rom_filename: String,
     pub rom_sha256: [u8; 32],
     pub rerecords: u32,
+    pub ramwatches: Vec<RamWatch>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +47,51 @@ impl PatternBuf {
 pub struct Pattern {
     pub buf: Rc<PatternBuf>,
     pub offset: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RamWatch {
+    pub name: String,
+    pub address: usize,
+    pub format: RamWatchFormat,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RamWatchFormat {
+    pub width: u8,
+    pub hex: bool,
+    pub signed: bool,
+}
+
+impl RamWatchFormat {
+    pub fn format_value(&self, mut v: u64) -> String {
+        if self.signed {
+            // sign-extend
+            if (v >> (self.width * 8 - 1)) & 1 == 1 {
+                v |= !((1 << self.width) - 1)
+            }
+            let v = v as i64;
+            if v < 0 {
+                if self.hex {
+                    format!("{v:0width$x}", width = self.width as usize * 2)
+                } else {
+                    format!("{v}")
+                }
+            } else {
+                if self.hex {
+                    format!(" {v:0width$x}", width = self.width as usize * 2)
+                } else {
+                    format!(" {v}")
+                }
+            }
+        } else {
+            if self.hex {
+                format!("{v:0width$x}", width = self.width as usize * 2)
+            } else {
+                format!("{v}")
+            }
+        }
+    }
 }
 
 impl Movie {
@@ -78,6 +125,7 @@ impl Movie {
             rom_sha256,
             core_id,
             rerecords: 0,
+            ramwatches: vec![],
         }
     }
 
@@ -116,6 +164,7 @@ impl Movie {
             rom_sha256,
             core_id,
             rerecords: file.rerecords,
+            ramwatches: file.ramwatches,
         })
     }
 

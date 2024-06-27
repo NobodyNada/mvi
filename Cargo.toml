@@ -15,9 +15,8 @@ crossbeam = "0.8.2"
 dirs = "5.0.1"
 flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] }
 
-# using a forked imgui for now to remove a debug print
-imgui = { git = "https://github.com/NobodyNada/imgui-rs", branch = "main", features = ["docking", "tables-api"] }
-imgui-winit-support = { git = "https://github.com/NobodyNada/imgui-rs", branch = "main" }
+imgui = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f7f11363e62f09aa0e1288a17800e505860486", features = ["docking", "tables-api"] }
+imgui-winit-support = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f7f11363e62f09aa0e1288a17800e505860486" }
 
 libloading = "0.8.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }

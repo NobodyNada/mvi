@@ -18,11 +18,13 @@ mod backend;
 mod keybinds;
 mod menu;
 mod piano_roll;
+mod ramwatch;
 
 pub struct Ui {
     tas: Option<Tas>,
     keybinds: keybinds::Keybinds,
     piano_roll: piano_roll::PianoRoll,
+    ramwatch: ramwatch::RamWatch,
     framebuffer: Option<Framebuffer>,
     audio: Option<AudioWriter>,
 
@@ -39,6 +41,8 @@ pub struct Ui {
     hash_mismatch: Option<menu::HashMismatch>,
     keybind_editor: Option<keybinds::KeybindEditor>,
     reported_error: Option<ReportedError>,
+
+    ignore_events: bool,
 }
 
 struct Download {
@@ -113,6 +117,7 @@ pub fn run() -> Result<()> {
                 tas: None,
                 keybinds: keybinds::Keybinds::new(),
                 piano_roll: piano_roll::PianoRoll::new(),
+                ramwatch: ramwatch::RamWatch::new(),
                 framebuffer: None,
                 audio: None,
                 core_db,
@@ -126,6 +131,7 @@ pub fn run() -> Result<()> {
                 keybind_editor: None,
 
                 modifiers: Default::default(),
+                ignore_events: false,
             };
 
             move |imgui, renderer| {
@@ -141,6 +147,8 @@ pub fn run() -> Result<()> {
 impl Ui {
     fn render(&mut self, ui: &mut imgui::Ui, renderer: &mut Renderer) {
         // Render the UI
+
+        let mut ignore_events = false;
 
         let flags =
         // No borders etc for top-level window
@@ -206,11 +214,12 @@ impl Ui {
             }
         }
 
-        self.draw_menu(ui);
-        self.draw_core_selector(ui);
-        self.draw_hash_mismatch(ui);
+        self.handle_error(|s| s.draw_menu(ui));
+        ignore_events |= self.draw_core_selector(ui);
+        ignore_events |= self.draw_hash_mismatch(ui);
 
         if let Some(error) = &self.reported_error {
+            ignore_events = true;
             const ID: &str = "Error";
             if let Some(_token) = ui
                 .modal_popup_config(ID)
@@ -240,6 +249,7 @@ impl Ui {
         }
 
         if self.download_progress.is_some() {
+            ignore_events = true;
             let mut completed = false;
             match &self.download_progress.as_ref().unwrap().item {
                 DownloadItem::CoreDb(rx) => match rx.try_recv() {
@@ -300,6 +310,7 @@ impl Ui {
         }
 
         if let Some(editor) = self.keybind_editor.as_mut() {
+            ignore_events = true;
             const ID: &str = "Keybind Editor";
             Ui::set_popup_position(ui);
             Ui::set_popup_size(ui, ui.window_size());
@@ -337,9 +348,12 @@ impl Ui {
                     imgui::Image::new(framebuffer.texture.id, [w, h]).build(ui)
                 });
 
+            ignore_events |= self.ramwatch.draw(ui, self.tas.as_mut().unwrap());
             self.piano_roll
                 .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
         }
+
+        self.ignore_events = ignore_events;
     }
 
     fn handle_event(&mut self, event: winit::event::Event<()>) {
@@ -366,12 +380,14 @@ impl Ui {
                             if let Some(editor) = self.keybind_editor.as_mut() {
                                 editor.key_down(key, self.modifiers);
                             } else if let Some(tas) = &mut self.tas {
-                                self.keybinds.key_down(
-                                    key,
-                                    self.modifiers,
-                                    tas,
-                                    &mut self.piano_roll,
-                                )
+                                if !self.ignore_events {
+                                    self.keybinds.key_down(
+                                        key,
+                                        self.modifiers,
+                                        tas,
+                                        &mut self.piano_roll,
+                                    )
+                                }
                             }
                         }
                         winit::event::ElementState::Released => {

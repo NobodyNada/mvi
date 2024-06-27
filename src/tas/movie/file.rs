@@ -34,6 +34,10 @@ pub struct MovieFile {
     #[serde(default)]
     pub rerecords: u32,
 
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The configured memory watches.
+    pub ramwatches: Vec<super::RamWatch>,
+
     /// The input frames, compressed with zlib. The uncompressed size of each frame will depend on
     /// the selected input_devices.
     pub inputs: Vec<u8>,
@@ -52,6 +56,7 @@ impl MovieFile {
             rom_sha256: movie.rom_sha256,
             input_devices: movie.input_ports.clone(),
             rerecords: movie.rerecords,
+            ramwatches: movie.ramwatches.clone(),
             inputs,
         }
     }

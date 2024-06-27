@@ -171,6 +171,18 @@ impl Tas {
         &self.movie
     }
 
+    pub fn read_ram_watch(&self, watch: &movie::RamWatch) -> Option<u64> {
+        let mut v = 0;
+        for offset in 0..watch.format.width as usize {
+            v |= (self.core.read_memory_byte(watch.address + offset)? as u64) << offset * 8;
+        }
+        Some(v)
+    }
+
+    pub fn ramwatches_mut(&mut self) -> &mut Vec<movie::RamWatch> {
+        &mut self.movie.ramwatches
+    }
+
     pub fn set_movie_path(&mut self, path: Option<std::path::PathBuf>) {
         self.movie.movie_path = path;
     }

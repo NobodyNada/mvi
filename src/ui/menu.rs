@@ -22,7 +22,8 @@ pub(super) struct HashMismatch {
 }
 
 impl Ui {
-    pub(super) fn draw_menu(&mut self, ui: &imgui::Ui) {
+    pub(super) fn draw_menu(&mut self, ui: &imgui::Ui) -> anyhow::Result<()> {
+        let mut result = Ok(());
         ui.menu_bar(|| {
             ui.menu("File", || {
                 if ui.menu_item("New Movie...") {
@@ -92,8 +93,15 @@ impl Ui {
                 if ui.menu_item("Keybinds...") {
                     self.keybind_editor = Some(keybinds::KeybindEditor::new(&mut self.keybinds));
                 }
-            })
+            });
+            if let Some(tas) = self.tas.as_mut() {
+                ui.menu("Tools", || {
+                    result = self.ramwatch.menu(ui, tas);
+                });
+            }
         });
+
+        result
     }
 
     // Creating Movies
@@ -158,9 +166,9 @@ impl Ui {
         });
     }
 
-    pub(super) fn draw_core_selector(&mut self, ui: &imgui::Ui) {
+    pub(super) fn draw_core_selector(&mut self, ui: &imgui::Ui) -> bool {
         let Some(core_selector) = &mut self.core_selector else {
-            return;
+            return false;
         };
         let db = self
             .core_db
@@ -223,7 +231,7 @@ impl Ui {
                                     self,
                                     &core_selector.selected_core_id.unwrap(),
                                 );
-                                return;
+                                return true;
                             }
                         }
 
@@ -258,7 +266,7 @@ impl Ui {
             if ui.button("Cancel") {
                 ui.close_current_popup();
                 self.core_selector = None;
-                return;
+                return true;
             }
             ui.same_line();
             ui.enabled(core_selector.selected_core_id.is_some(), || {
@@ -270,6 +278,8 @@ impl Ui {
         } else {
             ui.open_popup(ID);
         }
+
+        return true;
     }
 
     fn select_core<F: FnOnce(&mut Ui, &str) + Send + 'static>(
@@ -411,7 +421,7 @@ impl Ui {
         Ok(())
     }
 
-    pub(super) fn draw_hash_mismatch(&mut self, ui: &imgui::Ui) {
+    pub(super) fn draw_hash_mismatch(&mut self, ui: &imgui::Ui) -> bool {
         if let Some(mismatch) = self.hash_mismatch.as_mut() {
             const ID: &str = "Hash mismatch";
             if let Some(_token) = ui.begin_modal_popup(ID) {
@@ -451,7 +461,9 @@ impl Ui {
             } else {
                 ui.open_popup(ID);
             }
+            return true;
         }
+        false
     }
 
     fn open_movie_with_rom(

@@ -39,6 +39,7 @@ unsafe impl Send for Core {}
 pub struct CoreImpl {
     library: Library,
     pixel_format: PixelFormat,
+    memory_map: Vec<retro_memory_descriptor>,
     frame: Frame,
     input: *const [u8],
     input_ports: *const [InputPort],
@@ -135,6 +136,10 @@ impl Core {
 
     pub fn lock(&mut self) -> impl DerefMut<Target = CoreImpl> {
         lock()
+    }
+
+    pub fn read_memory_byte(&self, addr: usize) -> Option<u8> {
+        lock().get_memory_byte(addr).copied()
     }
 
     pub fn run_frame(
@@ -341,6 +346,7 @@ impl CoreImpl {
                 height: 0,
                 buffer: Vec::new(),
             },
+            memory_map: vec![],
             input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
             input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
             audio_callback: None,
@@ -368,6 +374,35 @@ impl CoreImpl {
 
     pub fn retro_api_version(&self) -> u32 {
         unsafe { (symbols().retro_api_version)() }
+    }
+
+    pub fn get_memory_map(&self) -> &[retro_memory_descriptor] {
+        &self.memory_map
+    }
+
+    pub fn get_memory_byte(&mut self, addr: usize) -> Option<&mut u8> {
+        for mapping in &self.memory_map {
+            if (addr & mapping.select) == (mapping.start & mapping.select) {
+                // Ignore disconnected address lines of the mapping:
+                // For each set bit of `disconnect`, shift all higher bits of `addr` to the right.
+                let mut disconnect = mapping.disconnect;
+                let mut addr = addr;
+                while disconnect != 0 {
+                    let bit = disconnect.trailing_zeros();
+                    let low_bits = addr & ((1 << bit) - 1);
+                    let high_bits = addr & !((1 << (bit + 1)) - 1);
+                    addr = low_bits | (high_bits >> 1);
+
+                    disconnect &= !(1 << bit);
+                    disconnect >>= 1;
+                }
+
+                addr %= mapping.len;
+
+                unsafe { return mapping.ptr.add(mapping.offset + addr).cast::<u8>().as_mut() }
+            }
+        }
+        None
     }
 
     fn video_refresh_callback(
@@ -410,6 +445,18 @@ impl CoreImpl {
         true
     }
 
+    fn set_memory_maps(&mut self, map: retro_memory_map) -> bool {
+        if map.num_descriptors == 0 {
+            self.memory_map = vec![];
+        } else {
+            let map = unsafe {
+                std::slice::from_raw_parts(map.descriptors, map.num_descriptors as usize)
+            };
+            self.memory_map = map.to_vec();
+        }
+        true
+    }
+
     fn no_input_callback(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
         unreachable!()
     }
@@ -419,6 +466,7 @@ unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
     let mut core = lock();
     match cmd {
         RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
+        RETRO_ENVIRONMENT_SET_MEMORY_MAPS => core.set_memory_maps(*data.cast()),
         _ => false,
     }
 }
