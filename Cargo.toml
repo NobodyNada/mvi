@@ -21,7 +21,7 @@ imgui-winit-support = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f
 libloading = "0.8.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
 reqwest = "0.12.5"
-rfd = { git = "https://github.com/NobodyNada/rfd", branch = "macos-title-message" }
+rfd = "0.14.1"
 rubato = "0.15.0"
 rust-ini = "0.21.0"
 serde = { version = "1.0.193", features = ["derive"] }
