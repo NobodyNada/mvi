@@ -357,14 +357,17 @@ impl Greenzone {
 
         if g.full_memory_used + g.delta_memory_used > self.memory_threshold() && !g.gc_in_progress {
             g.gc_in_progress = true;
-            //  Handle all pending operations first, so the btree is fully consistent.
-            std::mem::drop(lock);
-            self.notify.send(Notification::Flush).unwrap();
-            // Flush a second time, to wait for the first to complete.
-            self.notify.send(Notification::Flush).unwrap();
-            lock = self.g.lock().unwrap();
-            g = &mut *lock;
-            assert!(g.pending.is_empty());
+            while !g.pending.is_empty() {
+                //  Handle all pending operations first, so the btree is fully consistent.
+                std::mem::drop(lock);
+                self.notify.send(Notification::Flush).unwrap();
+                // Flush a second time, to wait for the first to complete.
+                self.notify.send(Notification::Flush).unwrap();
+                lock = self.g.lock().unwrap();
+                g = &mut *lock;
+                // Loop, because someone could have added an operation between us flushing and
+                // taking the lock
+            }
 
             // Sanity check: make sure we don't have any orphaned delta states
             let mut full_states = g.full_states.iter().peekable();
