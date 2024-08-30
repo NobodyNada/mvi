@@ -57,7 +57,10 @@ pub struct Renderer {
     _font_texture: Arc<Texture>,
 }
 
+#[derive(Debug)]
 pub struct Target {
+    /// The window this target belongs to.
+    window: Arc<winit::window::Window>,
     /// The surface to render to.
     surface: Arc<vk::swapchain::Surface>,
     /// The swapchain to use, and the buffers bound to that swapchain.
@@ -78,7 +81,7 @@ mod shaders {
     use vulkano::{buffer::BufferContents, pipeline::graphics::vertex_input::Vertex};
     use vulkano_shaders::shader;
 
-    #[derive(BufferContents, Vertex, Clone, Copy)]
+    #[derive(BufferContents, Vertex, Clone, Copy, Debug)]
     #[repr(C)]
     pub struct DrawVert {
         #[format(R32G32_SFLOAT)]
@@ -658,8 +661,9 @@ impl<'a> Drop for Frame<'a> {
 
 impl Target {
     /// Creates a new render target for the given surface.
-    pub fn new(surface: Arc<vk::swapchain::Surface>) -> Self {
+    pub fn new(window: Arc<winit::window::Window>, surface: Arc<vk::swapchain::Surface>) -> Self {
         Self {
+            window,
             surface,
             framebuffers: Framebuffers::Invalid {
                 old_swapchain: None,
@@ -689,35 +693,38 @@ impl Target {
                     framebuffers,
                 } => (swapchain.clone(), framebuffers), // Yes, use it.
                 Framebuffers::Invalid { .. } => {
-                    self.create(renderer)?; // No, create one.
+                    // No, create one.
+                    let extent = self.window.inner_size();
+                    let extent = [extent.width, extent.height];
+                    self.create(renderer, extent)?;
                     continue;
                 }
             };
 
             // Get the next framebuffer from the swapchain.
-            match vk::swapchain::acquire_next_image(swapchain.clone(), None)? {
-                (index, suboptimal, ready) => {
-                    let index = index as usize;
-                    let framebuffer = framebuffers[index].clone();
-                    if suboptimal {
-                        // Vulkan told us that the surface has changed so that our swapchain is no
-                        // longer a perfect match. We can still render with it, but we should
-                        // recreate it next time for better results.
-                        self.invalidate();
-                    }
-                    return Ok(Framebuffer {
-                        swapchain,
-                        framebuffer,
-                        index,
-                        ready,
-                    });
+            let (index, suboptimal, ready) =
+                vk::swapchain::acquire_next_image(swapchain.clone(), None)?;
+            {
+                let index = index as usize;
+                let framebuffer = framebuffers[index].clone();
+                if suboptimal {
+                    // Vulkan told us that the surface has changed so that our swapchain is no
+                    // longer a perfect match. We can still render with it, but we should
+                    // recreate it next time for better results.
+                    self.invalidate();
                 }
+                return Ok(Framebuffer {
+                    swapchain,
+                    framebuffer,
+                    index,
+                    ready,
+                });
             }
         }
     }
 
     /// Creates or recreates the framebuffers and swapchain.
-    pub fn create(&mut self, renderer: &Renderer) -> Result<()> {
+    pub fn create(&mut self, renderer: &Renderer, image_extent: [u32; 2]) -> Result<()> {
         // If we have an old swapchain, we can reuse its resources.
         let old_swapchain = match std::mem::take(&mut self.framebuffers) {
             Framebuffers::Valid { swapchain, .. } => Some(swapchain),
@@ -729,9 +736,6 @@ impl Target {
             .device()
             .physical_device()
             .surface_capabilities(&self.surface, Default::default())?;
-        let mut image_extent = surface_caps.current_extent.unwrap_or([0, 0]);
-        image_extent[0] = image_extent[0].max(1);
-        image_extent[1] = image_extent[1].max(1);
 
         let mut min_image_count = 3;
         min_image_count = min_image_count.max(surface_caps.min_image_count);
@@ -783,6 +787,7 @@ impl Target {
 }
 
 /// The framebuffers & swapchain to use for rendering.
+#[derive(Debug)]
 enum Framebuffers {
     /// We do not have valid framebuffers.
     Invalid {

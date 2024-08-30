@@ -52,10 +52,12 @@ impl AudioWriter {
         let output_channels = config.channels() as usize;
 
         // 3 frames at 60fps seems like a reasonable buffer size
-        let bufsize = output_sample_rate / 20;
+        let bufsize = (output_sample_rate / 20).next_power_of_two();
 
-        // Default to a third of that (~one frame) for the system's audio buffer size
-        let device_bufsize = bufsize / 3;
+        // Default to a fourth of that (~one frame) for the system's audio buffer size
+        // That way we can be sure we always have enough samples for the system,
+        // and room for more samples from the emulator
+        let device_bufsize = bufsize / 4;
         let device_bufsize = match config.buffer_size() {
             cpal::SupportedBufferSize::Range { min, max } => {
                 // But if that's not compatible, clamp it to the system's supported range

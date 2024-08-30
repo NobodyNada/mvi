@@ -219,7 +219,7 @@ fn render_thread<E, R>(
     // Create and initialize our renderer with a Vulkan surface.
     let mut renderer = render::Renderer::new(vk_context, &surface, &mut imgui).unwrap();
 
-    let mut target = render::Target::new(surface);
+    let mut target = render::Target::new(window.clone(), surface);
 
     let main_viewport = imgui.main_viewport_mut();
     ViewportBackend::initialize_viewport_data(main_viewport);
@@ -269,7 +269,8 @@ fn render_thread<E, R>(
                         .unwrap();
 
                     viewport.dpi_scale = window.scale_factor().round() as f32;
-                    viewport_windows.insert(id, (window, render::Target::new(surface)));
+                    viewport_windows
+                        .insert(id, (window.clone(), render::Target::new(window, surface)));
                 }
                 ViewportEvent::Destroy(id) => {
                     viewport_windows.remove(&id);
