@@ -633,7 +633,7 @@ impl Renderer {
     }
 }
 
-impl<'a> Frame<'a> {
+impl Frame<'_> {
     pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
         let inflight = self.renderer._render(target, draw_data)?;
         self.inflight = if let Some(prev) = std::mem::take(&mut self.inflight) {
@@ -653,7 +653,7 @@ impl<'a> Frame<'a> {
     }
 }
 
-impl<'a> Drop for Frame<'a> {
+impl Drop for Frame<'_> {
     fn drop(&mut self) {
         self.renderer.previous_frame = std::mem::take(&mut self.inflight);
     }
@@ -696,7 +696,7 @@ impl Target {
                     // No, create one.
                     let extent = self.window.inner_size();
                     let extent = [extent.width, extent.height];
-                    self.create(renderer, extent)?;
+                    self.create(renderer, dbg!(extent))?;
                     continue;
                 }
             };

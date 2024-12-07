@@ -181,7 +181,7 @@ fn render_thread<E, R>(
     imgui.io_mut().mouse_double_click_time = 0.5;
 
     let mut platform = WinitPlatform::init(&mut imgui);
-    platform.attach_window(imgui.io_mut(), &*window, HiDpiMode::Default);
+    platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Locked(1.0));
     imgui.platform_io_mut().monitors.replace_from_slice(
         &window
             .available_monitors()
@@ -190,7 +190,7 @@ fn render_thread<E, R>(
                 work_pos: monitor.position().cast::<f32>().into(),
                 main_size: monitor.size().cast::<f32>().into(),
                 work_size: monitor.size().cast::<f32>().into(),
-                dpi_scale: monitor.scale_factor() as f32,
+                dpi_scale: monitor.scale_factor().ceil() as f32,
             })
             .collect::<Vec<_>>(),
     );
@@ -208,7 +208,7 @@ fn render_thread<E, R>(
         },
         FontSource::TtfData {
             data: include_bytes!("./arrows.ttf"),
-            size_pixels: 13.,
+            size_pixels: (13f32 * 1.5).floor(),
             config: Some(FontConfig {
                 glyph_ranges: FontGlyphRanges::from_slice(&ARROW_GLYPHS),
                 ..font_config
@@ -223,14 +223,10 @@ fn render_thread<E, R>(
 
     let main_viewport = imgui.main_viewport_mut();
     ViewportBackend::initialize_viewport_data(main_viewport);
-    ViewportBackend::data(main_viewport).pos = platform
-        .scale_pos_from_winit(
-            &window,
-            window
-                .inner_position()
-                .unwrap_or_default()
-                .to_logical(window.scale_factor()),
-        )
+    ViewportBackend::data(main_viewport).pos = window
+        .inner_position()
+        .unwrap_or_default()
+        .to_logical::<f32>(window.scale_factor().ceil())
         .cast::<f32>()
         .into();
     let mut viewport_windows = HashMap::<Id, (Arc<Window>, render::Target)>::new();
@@ -268,7 +264,7 @@ fn render_thread<E, R>(
                         .take()
                         .unwrap();
 
-                    viewport.dpi_scale = window.scale_factor().round() as f32;
+                    viewport.dpi_scale = window.scale_factor().ceil() as f32;
                     viewport_windows
                         .insert(id, (window.clone(), render::Target::new(window, surface)));
                 }
@@ -279,8 +275,8 @@ fn render_thread<E, R>(
                 ViewportEvent::SetPos(id, pos) => {
                     let window = &viewport_windows[&id].0;
                     window.set_outer_position(
-                        platform
-                            .scale_pos_for_winit(window, LogicalPosition::<f32>::from(pos).cast()),
+                        LogicalPosition::<f32>::from(pos)
+                            .to_physical::<f32>(window.scale_factor().ceil()),
                     );
                     window.request_redraw();
                 }
@@ -335,17 +331,15 @@ fn render_thread<E, R>(
                         continue;
                     };
 
+                    let scale_factor = window.scale_factor().ceil();
                     let viewport = imgui.viewport_by_id_mut(viewport).unwrap();
 
                     match e {
                         WindowEvent::Resized(_new_size) => {
                             let new_size = window.inner_size();
                             target.invalidate();
-                            let new_size = platform
-                                .scale_size_from_winit(
-                                    window,
-                                    new_size.to_logical(window.scale_factor()),
-                                )
+                            let new_size = new_size
+                                .to_logical::<f32>(scale_factor)
                                 .cast::<f32>()
                                 .into();
                             ViewportBackend::data(viewport).size = new_size;
@@ -356,13 +350,8 @@ fn render_thread<E, R>(
                         }
                         WindowEvent::Moved(new_pos) => {
                             let new_pos = window.inner_position().unwrap_or(new_pos);
-                            ViewportBackend::data(viewport).pos = platform
-                                .scale_pos_from_winit(
-                                    window,
-                                    new_pos.to_logical(window.scale_factor()),
-                                )
-                                .cast::<f32>()
-                                .into();
+                            ViewportBackend::data(viewport).pos =
+                                new_pos.to_logical::<f32>(scale_factor).into();
                             viewport.platform_request_move = true;
                         }
                         WindowEvent::Focused(focused) => {
@@ -380,8 +369,7 @@ fn render_thread<E, R>(
                                 position.x + window_pos.x as f64,
                                 position.y + window_pos.y as f64,
                             );
-                            let logical: LogicalPosition<f64> =
-                                physical.to_logical(window.scale_factor());
+                            let logical: LogicalPosition<f64> = physical.to_logical(scale_factor);
                             imgui
                                 .io_mut()
                                 .add_mouse_pos_event([logical.x as f32, logical.y as f32])
@@ -412,9 +400,13 @@ fn render_thread<E, R>(
         imgui.update_platform_windows();
         let mut frame = renderer.begin();
 
+        let scale_factor = window.scale_factor().ceil() as f32;
+        imgui.io_mut().display_framebuffer_scale = [scale_factor, scale_factor];
         frame.render(&mut target, imgui.render()).unwrap();
 
         for (viewport, (_w, target)) in &mut viewport_windows {
+            let scale_factor = _w.scale_factor().ceil() as f32;
+            imgui.io_mut().display_framebuffer_scale = [scale_factor, scale_factor];
             let viewport = imgui.viewport_by_id_mut(*viewport).unwrap();
             frame.render(target, viewport.draw_data()).unwrap();
         }
