@@ -696,7 +696,7 @@ impl Target {
                     // No, create one.
                     let extent = self.window.inner_size();
                     let extent = [extent.width, extent.height];
-                    self.create(renderer, dbg!(extent))?;
+                    self.create(renderer, extent)?;
                     continue;
                 }
             };

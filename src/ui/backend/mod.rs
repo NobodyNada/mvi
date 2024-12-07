@@ -208,7 +208,7 @@ fn render_thread<E, R>(
         },
         FontSource::TtfData {
             data: include_bytes!("./arrows.ttf"),
-            size_pixels: (13f32 * 1.5).floor(),
+            size_pixels: 13.,
             config: Some(FontConfig {
                 glyph_ranges: FontGlyphRanges::from_slice(&ARROW_GLYPHS),
                 ..font_config
