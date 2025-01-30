@@ -36,6 +36,11 @@ pub struct MovieFile {
     /// The attached controllers.
     pub input_devices: Vec<tas::input::InputPort>,
 
+    /// Extra libretro variables fed to the libretro core.
+    /// Used for sync settings.
+    #[serde(default)]
+    pub environment_variables: HashMap<String, String>,
+
     /// The number of rerecords.
     #[serde(default)]
     pub rerecords: u32,
@@ -65,6 +70,7 @@ impl MovieFile {
             rom_filename: movie.rom_filename.clone(),
             rom_sha256: movie.rom_sha256,
             input_devices: movie.input_ports.clone(),
+            environment_variables: movie.environment_variables.clone(),
             rerecords: movie.rerecords,
             ramwatches: movie.ramwatches.clone(),
             inputs,
