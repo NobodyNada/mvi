@@ -587,6 +587,7 @@ impl Greenzone {
                 Operation::Reparent {
                     frame, new_parent, ..
                 } => {
+                    // FIXME: seen crash here
                     let mut delta = g.delta_states.get_mut(&frame).unwrap().clone();
                     let new_parent = g.full_states.get(&new_parent).unwrap().clone();
                     g.delta_memory_used -= delta.size();
