@@ -155,6 +155,7 @@ impl Keybinds {
         fn next_frame(ctx: Context<'_>, should_insert: bool) {
             ctx.tas.set_run_mode(tas::RunMode::Paused);
             if should_insert {
+                #[expect(clippy::unnecessary_to_owned)] // clippy false-positive
                 ctx.tas.insert(
                     ctx.tas.selected_frame() + 1,
                     &ctx.tas.movie().default_frame().to_vec(),
@@ -191,7 +192,7 @@ impl Keybinds {
                 frames.extend_from_slice(ctx.tas.movie().default_frame());
                 pattern.apply(ctx.tas.movie().input_ports(), &mut frames[offset..]);
 
-                ctx.tas.set_input(&pattern);
+                ctx.tas.set_input(pattern);
             } else {
                 pattern.offset += 1;
 
@@ -223,13 +224,13 @@ impl Keybinds {
                 let old_len = previous.len();
                 previous.extend_from_slice(ctx.tas.frame(ctx.tas.selected_frame()));
                 p.expand(
-                    &ctx.tas.movie().input_ports(),
+                    ctx.tas.movie().input_ports(),
                     (old_len / p.buf.frame_size + 1) as u32,
                 );
                 let buf = Rc::make_mut(&mut p.buf);
-                pattern.apply(&ctx.tas.movie().input_ports(), &mut buf.data[old_len..]);
+                pattern.apply(ctx.tas.movie().input_ports(), &mut buf.data[old_len..]);
 
-                ctx.tas.set_input(&pattern);
+                ctx.tas.set_input(pattern);
             }
         }
         register_multiple(
@@ -266,7 +267,7 @@ impl Keybinds {
                             } else {
                                 pattern.offset -= 1;
                             }
-                            ctx.tas.set_input(&pattern);
+                            ctx.tas.set_input(pattern);
                         }
                         _ => unreachable!(),
                     }

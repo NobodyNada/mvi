@@ -50,6 +50,7 @@ struct Download {
     progress: Arc<AtomicCell<core::info::Progress>>,
 }
 
+#[expect(clippy::type_complexity)]
 enum DownloadItem {
     CoreDb(mpsc::Receiver<core::info::Result<core::info::CoreDb>>),
     Core {
@@ -86,7 +87,7 @@ pub fn run() -> Result<()> {
             core_db = Some(db);
             download_progress = None;
         }
-        Err(core::info::Error::IoError(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+        Err(core::info::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             core_db = None;
 
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -172,7 +173,8 @@ impl Ui {
                 .begin()
         };
 
-        let dockspace_id = unsafe { std::mem::transmute::<_, u32>(ui.new_id_str("MviDockspace")) };
+        let dockspace_id =
+            unsafe { std::mem::transmute::<imgui::Id, u32>(ui.new_id_str("MviDockspace")) };
 
         unsafe {
             let dockspace_needs_setup = imgui::sys::igDockBuilderGetNode(dockspace_id).is_null();
@@ -231,6 +233,7 @@ impl Ui {
                     ui.text(format!("{:?}", error.error));
                 }
 
+                #[expect(clippy::collapsible_else_if)]
                 if error.is_fatal {
                     if ui.button("Exit") {
                         std::process::exit(1);
@@ -357,6 +360,7 @@ impl Ui {
     }
 
     fn handle_event(&mut self, event: winit::event::Event<()>) {
+        #[expect(clippy::single_match)]
         match event {
             winit::event::Event::WindowEvent {
                 window_id: _,
@@ -437,7 +441,7 @@ impl Ui {
         self.keybinds.reset();
         self.tas = None;
         self.framebuffer = None;
-        let core = unsafe { core::Core::load(&core_path, &game_path)? };
+        let core = unsafe { core::Core::load(core_path, game_path)? };
         self.audio = Some(AudioWriter::new(core.av_info.timing.sample_rate as usize)?);
         self.tas = Some(tas(core)?);
         Ok(())
@@ -549,7 +553,7 @@ impl Ui {
     fn handle_error<F: FnOnce(&mut Ui) -> anyhow::Result<()>>(&mut self, f: F) {
         match f(self) {
             Ok(()) => {}
-            Err(e) => self.report_error(e.into(), false),
+            Err(e) => self.report_error(e, false),
         }
     }
 }

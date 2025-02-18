@@ -193,8 +193,11 @@ impl AudioWriter {
                     for slice in [read_buffer.0, read_buffer.1] {
                         // Copy some samples to the output stream.
                         let samples_to_write = (out_buf.len() - samples_written).min(slice.len());
-                        out_buf[samples_written..][..samples_to_write]
-                            .copy_from_slice(std::mem::transmute(&slice[0..samples_to_write]));
+                        out_buf[samples_written..][..samples_to_write].copy_from_slice(
+                            std::mem::transmute::<&[std::mem::ManuallyDrop<f32>], &[f32]>(
+                                &slice[0..samples_to_write],
+                            ),
+                        );
                         samples_written += samples_to_write;
                     }
 
@@ -209,7 +212,9 @@ impl AudioWriter {
                         {
                             let ramp = ramp_index as f32 / ramp_len as f32;
                             frame[0] *= ramp;
-                            frame.get_mut(1).map(|s| *s *= ramp);
+                            if let Some(s) = frame.get_mut(1) {
+                                *s *= ramp;
+                            }
                         }
                     }
                     if samples_written == out_buf.len() {
@@ -226,7 +231,9 @@ impl AudioWriter {
                         {
                             let ramp = (ramp_len - ramp_index) as f32 / ramp_len as f32;
                             frame[0] *= ramp;
-                            frame.get_mut(1).map(|s| *s *= ramp);
+                            if let Some(s) = frame.get_mut(1) {
+                                *s *= ramp;
+                            }
                         }
                     }
                     buffer.commit_read(samples_written);

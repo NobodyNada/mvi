@@ -51,10 +51,10 @@ pub struct CoreInfo {
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("I/O error")]
-    IoError(#[from] std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error("HTTP request failed")]
-    HttpError(#[from] reqwest::Error),
+    Http(#[from] reqwest::Error),
 
     #[error("HTTP response too large")]
     ResponseTooLarge(std::num::TryFromIntError),
@@ -118,7 +118,7 @@ impl CoreDb {
 
     /// Loads a CoreDb from 'info.zip'.
     pub fn load_from_json(json: &[u8]) -> Result<CoreDb> {
-        let mut db: CoreDb = serde_json::from_slice(&json)?;
+        let mut db: CoreDb = serde_json::from_slice(json)?;
         db.cores.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         Ok(db)
     }
@@ -143,7 +143,7 @@ impl CoreDb {
     /// - id: The core to download.
     /// - progress: A channel for reporting the download progress.
     /// - force: If true, the core will be downloaded even if a cached core is available. If false,
-    /// a cached core will be returned if present.
+    ///   a cached core will be returned if present.
     pub fn download_core(
         &self,
         id: String,
@@ -201,13 +201,17 @@ impl CoreDb {
                 .map(|l| l.try_into().map_err(Error::ResponseTooLarge))
                 .transpose()?,
         };
-        progress.upgrade().map(|progress| progress.store(p));
+        if let Some(progress) = progress.upgrade() {
+            progress.store(p)
+        }
 
         let mut buf = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             buf.extend_from_slice(&chunk);
             p.downloaded += chunk.len();
-            progress.upgrade().map(|progress| progress.store(p));
+            if let Some(progress) = progress.upgrade() {
+                progress.store(p)
+            }
         }
 
         Ok(buf)

@@ -82,6 +82,7 @@ impl PianoRoll {
 
     pub fn draw(&mut self, ui: &Ui, tas: &mut Tas, keybinds: &keybinds::Keybinds) {
         if !ui.is_mouse_down(imgui::MouseButton::Left) {
+            #[expect(clippy::single_match)]
             match self.drag_mode.take() {
                 Some(DragMode::Input {
                     index,
@@ -303,6 +304,7 @@ impl PianoRoll {
                                     autofire,
                                 }) = &mut self.drag_mode
                                 {
+                                    #[expect(clippy::comparison_chain)]
                                     if ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                                         && row != *end
                                     {

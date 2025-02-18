@@ -174,7 +174,7 @@ impl Tas {
     pub fn read_ram_watch(&self, watch: &movie::RamWatch) -> Option<u64> {
         let mut v = 0;
         for offset in 0..watch.format.width as usize {
-            v |= (self.core.read_memory_byte(watch.address + offset)? as u64) << offset * 8;
+            v |= (self.core.read_memory_byte(watch.address + offset)? as u64) << (offset * 8);
         }
         Some(v)
     }
@@ -375,12 +375,11 @@ impl Tas {
     /// input may have changed.
     pub fn invalidate(&mut self, after: u32) {
         let invalidated = self.movie.greenzone.invalidate(after);
-        if invalidated {
-            if self.earliest_invalidated_frame.is_none()
-                || self.earliest_invalidated_frame.unwrap() > after
-            {
-                self.earliest_invalidated_frame = Some(after);
-            }
+        if invalidated
+            && (self.earliest_invalidated_frame.is_none()
+                || self.earliest_invalidated_frame.unwrap() > after)
+        {
+            self.earliest_invalidated_frame = Some(after);
         }
 
         if self.next_emulator_frame > after {
@@ -480,6 +479,7 @@ impl Tas {
         }
     }
 
+    #[expect(clippy::comparison_chain)]
     pub fn select(&mut self, frame: u32) {
         if frame < self.selected_frame {
             self.select_prev(self.selected_frame - frame);

@@ -64,6 +64,7 @@ pub struct RamWatchFormat {
 }
 
 impl RamWatchFormat {
+    #[expect(clippy::collapsible_else_if)]
     pub fn format_value(&self, mut v: u64) -> String {
         if self.signed {
             // sign-extend

@@ -36,6 +36,7 @@ pub struct Core {
 }
 unsafe impl Send for Core {}
 
+#[expect(clippy::type_complexity)]
 pub struct CoreImpl {
     library: Library,
     pixel_format: PixelFormat,
@@ -433,7 +434,9 @@ impl CoreImpl {
 
     fn audio_callback(&mut self, data: &[AudioFrame]) {
         unsafe {
-            self.audio_callback.map(|cb| (*cb)(data));
+            if let Some(cb) = self.audio_callback {
+                (*cb)(data)
+            }
         }
     }
 

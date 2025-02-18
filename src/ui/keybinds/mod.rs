@@ -1,3 +1,5 @@
+#![expect(clippy::type_complexity)]
+
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -171,7 +173,7 @@ impl Keybinds {
                 input_ports
                     .get(port)
                     .and_then(|port| ports.get(port))
-                    .and_then(|bindings| bindings.get(&key))
+                    .and_then(|bindings| bindings.get(key))
                     // TODO: handle index
                     .map(|id| (port as u32, 0, *id))
             })
@@ -243,7 +245,7 @@ impl Keybinds {
                         *pattern.autohold_mut(tas.movie().input_ports(), port, index, id) = false;
                     }
                     if pattern.read(tas.movie().input_ports(), port, 0, id) != 1 {
-                        pattern.write(&tas.movie().input_ports(), port, index, id, 1);
+                        pattern.write(tas.movie().input_ports(), port, index, id, 1);
                         input_changed = true;
                     }
                 }
@@ -283,7 +285,6 @@ impl Keybinds {
             } else {
                 self.reset_bindings();
             }
-            return;
         }
     }
 
@@ -303,7 +304,7 @@ impl Keybinds {
                     && !pattern.autohold(tas.movie().input_ports(), port, index, id)
                     && pattern.read(tas.movie().input_ports(), port, index, id) != 0
                 {
-                    pattern.write(&tas.movie().input_ports(), port, index, id, 0);
+                    pattern.write(tas.movie().input_ports(), port, index, id, 0);
                     tas.set_input(pattern);
                     if let tas::RunMode::Paused = tas.run_mode() {
                         Self::write_input_change_to_action(tas, pattern, action)
@@ -365,12 +366,12 @@ impl Keybinds {
             tas::ActionKind::Delete(_) => unreachable!("unexpected action kind"),
             tas::ActionKind::Apply { pattern: p, .. } => {
                 p.expand(
-                    &tas.movie().input_ports(),
+                    tas.movie().input_ports(),
                     (tas.selected_frame() - action.cursor) + 1,
                 );
                 let buf = Rc::make_mut(&mut p.buf);
                 pattern.apply(
-                    &tas.movie().input_ports(),
+                    tas.movie().input_ports(),
                     &mut buf.data
                         [(tas.selected_frame() - action.cursor) as usize * buf.frame_size..],
                 );
@@ -604,6 +605,7 @@ impl InputNode {
                 let remainder = &binding[1..];
 
                 let mappings = mappings.entry(key.clone()).or_default();
+                #[expect(clippy::collapsible_else_if)]
                 if let Some(conflict) = mappings.iter_mut().find(|(m, _)| m == mods) {
                     if remainder.is_empty() {
                         // We already have something mapped to this key, and we're trying to put an
@@ -639,7 +641,7 @@ impl InputNode {
         match self {
             Self::Action(_) => None,
             Self::Branch(mappings) => {
-                if let Some(mappings) = mappings.get(&key) {
+                if let Some(mappings) = mappings.get(key) {
                     mappings
                         .iter()
                         .filter(|(mods, _)| *mods == modifiers)
@@ -676,7 +678,7 @@ mod serialize_controller_bindings {
 
     struct BindingSerializer<'a>(&'a BTreeMap<tas::input::InputPort, Vec<Option<Key>>>);
 
-    impl<'a> Serialize for BindingSerializer<'a> {
+    impl Serialize for BindingSerializer<'_> {
         fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
             let mut s = s.serialize_seq(Some(self.0.len()))?;
             for (device, bindings) in self.0 {

@@ -5,6 +5,7 @@ use sha2::Digest;
 
 use super::*;
 
+#[expect(clippy::type_complexity)]
 pub(super) struct CoreSelector {
     extension: Option<String>,
     show_non_matching: bool,
@@ -30,11 +31,13 @@ impl Ui {
                     self.load_rom();
                 }
                 if ui.menu_item("Open Movie...") {
-                    rfd::FileDialog::new()
+                    if let Some(path) = rfd::FileDialog::new()
                         .add_filter("mvi movie file", &["mvi"])
                         .set_title("Select a movie file")
                         .pick_file()
-                        .map(|path| self.open_movie(path));
+                    {
+                        self.open_movie(path)
+                    }
                 }
                 if !self.movie_cache.recents().is_empty() {
                     ui.separator();
@@ -279,7 +282,7 @@ impl Ui {
             ui.open_popup(ID);
         }
 
-        return true;
+        true
     }
 
     fn select_core<F: FnOnce(&mut Ui, &str) + Send + 'static>(
@@ -375,7 +378,7 @@ impl Ui {
 
             // Also include the extension of the ROM filename associated with the movie
             if let Some((_, e)) = file.rom_filename.rsplit_once(".") {
-                if extensions.iter().find(|&ext| ext == e).is_none() {
+                if !extensions.iter().any(|ext| ext == e) {
                     extensions.push(e.to_string());
                 }
             }

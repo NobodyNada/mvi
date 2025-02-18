@@ -70,7 +70,7 @@ impl KeybindEditor {
         if let Some(target) = &self.recording {
             const ID: &str = "Record Keybind";
             ui::Ui::set_popup_size(ui, [300., 100.]);
-            if let Some(_token) = ui.begin_modal_popup(&ID) {
+            if let Some(_token) = ui.begin_modal_popup(ID) {
                 match target {
                     // What's the name of the thing we're recording?
                     RecordTarget::Global(s) | RecordTarget::Normal(s) | RecordTarget::Insert(s) => {
