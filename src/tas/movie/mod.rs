@@ -22,6 +22,7 @@ pub struct Movie {
     pub rom_path: std::path::PathBuf,
     pub uuid: uuid::Uuid,
     pub core_id: String,
+    pub system_id: Option<String>,
     pub rom_filename: String,
     pub rom_sha256: [u8; 32],
     pub rerecords: u32,
@@ -100,6 +101,7 @@ impl Movie {
         input_ports: Vec<InputPort>,
         frame_0: core::Savestate,
         core_id: String,
+        system_id: Option<String>,
         rom_path: std::path::PathBuf,
         rom_sha256: [u8; 32],
     ) -> Movie {
@@ -125,6 +127,7 @@ impl Movie {
             rom_path,
             rom_sha256,
             core_id,
+            system_id,
             rerecords: 0,
             ramwatches: vec![],
         }
@@ -164,6 +167,7 @@ impl Movie {
             rom_path,
             rom_sha256,
             core_id,
+            system_id: file.system_id,
             rerecords: file.rerecords,
             ramwatches: file.ramwatches,
         })

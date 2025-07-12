@@ -1,4 +1,5 @@
 #include "libretro.h"
+#include "libretro_trace_extensions.h"
 
 typedef typeof(retro_api_version) retro_api_version_t;
 

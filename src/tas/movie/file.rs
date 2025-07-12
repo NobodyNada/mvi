@@ -20,6 +20,12 @@ pub struct MovieFile {
     /// The core ID of the core this movie was created with.
     pub core_id: String,
 
+    /// The system ID of the core this movie targets.
+    /// At the time this field was added, mvi only supported SNES cores -- therefore, we can assume
+    /// SNES if this value is not present.
+    #[serde(default = "default_system_id")]
+    pub system_id: Option<String>,
+
     /// The filename of the ROM this movie was created with. This is only used as a display name;
     /// the user can select any ROM file they want.
     pub rom_filename: String,
@@ -42,6 +48,9 @@ pub struct MovieFile {
     /// the selected input_devices.
     pub inputs: Vec<u8>,
 }
+fn default_system_id() -> Option<String> {
+    Some("super_nintendo".to_string())
+}
 
 impl MovieFile {
     pub fn new(movie: &Movie) -> MovieFile {
@@ -52,6 +61,7 @@ impl MovieFile {
         MovieFile {
             uuid: movie.uuid,
             core_id: movie.core_id.clone(),
+            system_id: movie.system_id.clone(),
             rom_filename: movie.rom_filename.clone(),
             rom_sha256: movie.rom_sha256,
             input_devices: movie.input_ports.clone(),

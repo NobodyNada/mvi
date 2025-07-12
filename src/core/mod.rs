@@ -4,9 +4,10 @@ use sha2::Digest;
 use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
+    ptr::null_mut,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, RwLock,
+        Arc, Mutex, RwLock,
     },
 };
 
@@ -15,6 +16,7 @@ use libloading::Library;
 use libretro_ffi::*;
 
 pub mod info;
+pub mod trace;
 
 mod savestate;
 pub use savestate::*;
@@ -31,6 +33,7 @@ pub struct Core {
     pub id: String,
     pub rom_path: std::path::PathBuf,
     pub rom_sha256: [u8; 32],
+    pub trace_fields: Option<Arc<trace::Fields>>,
     instance_id: usize,
     savestate_buffer: Box<[u8]>,
 }
@@ -45,6 +48,8 @@ pub struct CoreImpl {
     input: *const [u8],
     input_ports: *const [InputPort],
     audio_callback: Option<*mut dyn FnMut(&[AudioFrame])>,
+    trace_context: *mut retro_trace_ctx_t,
+    trace_buffer: Vec<u8>,
 }
 
 // The input_callback cannot be safely sent across threads, but we are careful to never do so.
@@ -121,11 +126,37 @@ impl Core {
             let savestate_buffer: Box<[u8]> = std::iter::repeat(0)
                 .take((symbols().retro_serialize_size)())
                 .collect();
+
+            let trace_ctx = lock().trace_context;
+            let trace_fields = if !trace_ctx.is_null() {
+                let mut trace_fields = vec![];
+                let mut field = (*trace_ctx).fields;
+                while !(*field).name.is_null() {
+                    trace_fields.push(trace::Field {
+                        name: std::ffi::CStr::from_ptr((*field).name)
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                        offset: (*field).offset,
+                        size: (*field).len,
+                        field_type: trace::FieldType::from((*field).flags),
+                    });
+                    field = field.add(1);
+                }
+                Some(Arc::new(trace::Fields {
+                    fields: trace_fields,
+                    end: (*field).offset,
+                }))
+            } else {
+                None
+            };
+
             let core = Core {
                 system_info,
                 id: path.file_stem().unwrap().to_string_lossy().into_owned(),
                 rom_path: game_path.to_owned(),
                 rom_sha256,
+                trace_fields,
                 av_info: dbg!(av_info),
                 frame: Frame::blank(&av_info),
                 instance_id: ID.fetch_add(1, Ordering::Relaxed),
@@ -351,6 +382,8 @@ impl CoreImpl {
             input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
             input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
             audio_callback: None,
+            trace_context: null_mut(),
+            trace_buffer: vec![],
         };
         ensure!(
             result.retro_api_version() == RETRO_API_VERSION,
@@ -460,6 +493,11 @@ impl CoreImpl {
         true
     }
 
+    fn set_trace_context(&mut self, ctx: *mut retro_trace_ctx_t) -> bool {
+        self.trace_context = ctx;
+        true
+    }
+
     fn no_input_callback(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
         unreachable!()
     }
@@ -470,6 +508,7 @@ unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
     match cmd {
         RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
         RETRO_ENVIRONMENT_SET_MEMORY_MAPS => core.set_memory_maps(*data.cast()),
+        RETRO_ENVIRONMENT_SET_TRACE_CONTEXT => core.set_trace_context(data.cast()),
         _ => false,
     }
 }

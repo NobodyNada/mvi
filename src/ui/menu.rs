@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use imgui::ItemHoveredFlags;
 use sha2::Digest;
 
 use super::*;
@@ -23,8 +24,7 @@ pub(super) struct HashMismatch {
 }
 
 impl Ui {
-    pub(super) fn draw_menu(&mut self, ui: &imgui::Ui) -> anyhow::Result<()> {
-        let mut result = Ok(());
+    pub(super) fn draw_menu(&mut self, ui: &imgui::Ui) {
         ui.menu_bar(|| {
             ui.menu("File", || {
                 if ui.menu_item("New Movie...") {
@@ -97,14 +97,32 @@ impl Ui {
                     self.keybind_editor = Some(keybinds::KeybindEditor::new(&mut self.keybinds));
                 }
             });
-            if let Some(tas) = self.tas.as_mut() {
-                ui.menu("Tools", || {
-                    result = self.ramwatch.menu(ui, tas);
+            if self.tas.is_some() {
+                ui.menu("Debug", || {
+                    self.handle_error(|s| {
+                        let tas = s.tas.as_mut().unwrap();
+                        s.ramwatch.menu(ui, tas)?;
+
+                        ui.separator();
+                        ui.enabled(tas.can_trace(), || {
+                            if ui.menu_item("Trace Debugger...") {
+                                if let Some(t) = &mut s.trace_debuger {
+                                    t.focus();
+                                } else {
+                                    s.trace_debuger = Some(debug::trace::TraceDebugger::new());
+                                }
+                            }
+                        });
+                        if !tas.can_trace()
+                            && ui.is_item_hovered_with_flags(ItemHoveredFlags::ALLOW_WHEN_DISABLED)
+                        {
+                            ui.tooltip_text("The current core does not support tracing.");
+                        }
+                        Ok(())
+                    });
                 });
             }
         });
-
-        result
     }
 
     // Creating Movies
@@ -159,9 +177,20 @@ impl Ui {
 
         self.handle_error(|ui| {
             ui.select_core(extension, move |ui, core_id| {
+                let cid = core_id.to_string();
                 ui.download_core(core_id, move |ui, core_path| {
+                    let system_id = ui
+                        .core_db
+                        .as_ref()
+                        .unwrap()
+                        .cores()
+                        .iter()
+                        .find(|core| core.id == cid)
+                        .unwrap()
+                        .system_id
+                        .clone();
                     ui.handle_error(|ui| {
-                        ui.load_game(&core_path?, &rom_path, |core| Ok(Tas::new(core)))
+                        ui.load_game(&core_path?, &rom_path, |core| Ok(Tas::new(core, system_id)))
                     })
                 })
             })

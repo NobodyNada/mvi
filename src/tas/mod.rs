@@ -1,6 +1,6 @@
 use std::{rc::Rc, time::Instant};
 
-use crate::core::{self, Core};
+use crate::core::{self, trace, Core};
 
 use self::movie::{Movie, Pattern};
 
@@ -36,6 +36,11 @@ pub struct Tas {
     /// The earliest frame that was recorded and then invalidated.
     /// If we record over this frame, that's a rerecord.
     earliest_invalidated_frame: Option<u32>,
+
+    /// Whether the trace debugger is enabled.
+    trace_enabled: bool,
+
+    trace: Option<trace::Trace>,
 }
 
 #[derive(Debug)]
@@ -94,7 +99,7 @@ pub enum ActionKind {
 }
 
 impl Tas {
-    pub fn new(mut core: Core) -> Tas {
+    pub fn new(mut core: Core, system_id: Option<String>) -> Tas {
         let input_ports = vec![input::InputPort::Joypad(input::Joypad::Snes)];
 
         let frame_0 = core.save_state(None);
@@ -103,6 +108,7 @@ impl Tas {
             input_ports,
             frame_0.compress(),
             core.id.clone(),
+            system_id,
             core.rom_path.clone(),
             core.rom_sha256,
         );
@@ -122,6 +128,8 @@ impl Tas {
 
             movie,
             core,
+            trace_enabled: false,
+            trace: None,
         }
     }
 
@@ -156,6 +164,8 @@ impl Tas {
 
             movie,
             core,
+            trace_enabled: false,
+            trace: None,
         })
     }
 
@@ -187,10 +197,35 @@ impl Tas {
         self.movie.movie_path = path;
     }
 
+    pub fn can_trace(&self) -> bool {
+        self.core.trace_fields.is_some()
+    }
+
+    pub fn trace_enabled(&self) -> bool {
+        self.trace_enabled
+    }
+
+    pub fn set_trace_enabled(&mut self, enabled: bool) {
+        assert!(!enabled || self.can_trace());
+        self.trace_enabled = enabled;
+    }
+
+    pub fn trace_fields(&self) -> Option<&[trace::Field]> {
+        self.core
+            .trace_fields
+            .as_deref()
+            .map(|f| f.fields.as_slice())
+    }
+
+    pub fn trace(&self) -> Option<&trace::Trace> {
+        self.trace.as_ref()
+    }
+
     pub fn run_guest_frame(
         &mut self,
         audio_callback: &mut impl FnMut(&[core::AudioFrame]),
     ) -> &core::Frame {
+        self.trace = None;
         if self
             .earliest_invalidated_frame
             .is_some_and(|e| self.next_emulator_frame > e)
@@ -203,8 +238,14 @@ impl Tas {
         } else {
             self.movie.default_frame()
         };
+        if self.trace_enabled() {
+            self.core.begin_trace();
+        }
         self.core
             .run_frame(frame, &self.movie.input_ports, audio_callback);
+        if self.trace_enabled() {
+            self.trace = Some(self.core.end_trace());
+        }
         self.next_emulator_frame += 1;
         self.movie.greenzone.save(
             self.next_emulator_frame,
@@ -255,6 +296,7 @@ impl Tas {
                 record_mode,
             } => {
                 while self.core_frame_fraction >= 1. {
+                    self.core_frame_fraction -= 1.;
                     if let Some(stop) = stop_at {
                         if self.playback_cursor >= *stop {
                             run_mode = RunMode::Paused;
@@ -300,7 +342,6 @@ impl Tas {
                     assert!(self.next_emulator_frame == self.playback_cursor + 1);
 
                     self.run_guest_frame(&mut audio_callback);
-                    self.core_frame_fraction -= 1.;
                 }
 
                 &self.core.frame

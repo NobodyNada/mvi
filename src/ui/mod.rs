@@ -15,6 +15,7 @@ use self::{audio::AudioWriter, backend::render::Renderer};
 
 mod audio;
 mod backend;
+mod debug;
 mod keybinds;
 mod menu;
 mod piano_roll;
@@ -41,6 +42,8 @@ pub struct Ui {
     hash_mismatch: Option<menu::HashMismatch>,
     keybind_editor: Option<keybinds::KeybindEditor>,
     reported_error: Option<ReportedError>,
+
+    trace_debuger: Option<debug::trace::TraceDebugger>,
 
     ignore_events: bool,
 }
@@ -130,6 +133,7 @@ pub fn run() -> Result<()> {
                 core_selector: None,
                 hash_mismatch: None,
                 keybind_editor: None,
+                trace_debuger: None,
 
                 modifiers: Default::default(),
                 ignore_events: false,
@@ -216,7 +220,7 @@ impl Ui {
             }
         }
 
-        self.handle_error(|s| s.draw_menu(ui));
+        self.draw_menu(ui);
         ignore_events |= self.draw_core_selector(ui);
         ignore_events |= self.draw_hash_mismatch(ui);
 
@@ -354,6 +358,12 @@ impl Ui {
             ignore_events |= self.ramwatch.draw(ui, self.tas.as_mut().unwrap());
             self.piano_roll
                 .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
+
+            if let Some(trace) = &mut self.trace_debuger {
+                if !trace.draw(ui, self.tas.as_mut().unwrap()) {
+                    self.trace_debuger = None;
+                }
+            }
         }
 
         self.ignore_events = ignore_events;
@@ -450,6 +460,7 @@ impl Ui {
     fn run_frame(&mut self, renderer: &mut Renderer) -> Option<(&Frame, &mut Framebuffer)> {
         let tas = self.tas.as_mut()?;
         let av = tas.av_info();
+        tas.set_trace_enabled(self.trace_debuger.is_some());
         let frame = tas.run_host_frame(|samples| {
             if let Some(writer) = self.audio.as_mut() {
                 writer.write(samples);

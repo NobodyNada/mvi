@@ -1,3 +1,7 @@
+[workspace]
+members = ["libretro-ffi"]
+resolver = "2"
+
 [package]
 name = "mvi"
 version = "0.1.0"
@@ -35,7 +39,12 @@ vulkano = "0.34.0"
 vulkano-shaders = "0.34.0"
 vulkano-util = "0.34.0"
 winit = { version = "0.29", features = ["rwh_05", "serde"] }
+zerocopy = { version = "0.8.20" }
 zip = { version = "2.1.3", features = ["deflate", "zstd", "bzip2"], default-features = false }
 
 [profile.dev]
 opt-level = 1
+
+[profile.profile]
+inherits = "release"
+debug = true
