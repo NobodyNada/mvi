@@ -153,7 +153,7 @@ impl Renderer {
         &self.command_buffer_allocator
     }
 
-    pub fn begin(&mut self) -> Frame {
+    pub fn begin(&mut self) -> Frame<'_> {
         if let Some(f) = self.previous_frame.as_mut() {
             f.cleanup_finished()
         }
