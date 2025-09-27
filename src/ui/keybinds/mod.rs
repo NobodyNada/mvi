@@ -407,6 +407,7 @@ impl Keybinds {
                             // If we have pending undo actions, push them.
                             tas.push_repeatable(action);
                         }
+                        tas.seek_to_selected();
                         tas::RecordMode::Insert {
                             pattern: pattern.clone(),
                             action: Action {
@@ -419,6 +420,7 @@ impl Keybinds {
                         if let Some(action) = action.take() {
                             tas.push_repeatable(action);
                         }
+                        tas.seek_to_selected();
                         tas::RecordMode::Overwrite {
                             pattern: pattern.clone(),
                             action: Action {

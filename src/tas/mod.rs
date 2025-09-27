@@ -546,6 +546,14 @@ impl Tas {
         self.run_mode = RunMode::Paused;
     }
 
+    pub fn seek_to_selected(&mut self) {
+        let n = self.playback_cursor.saturating_sub(self.selected_frame);
+        self.seek_to(self.selected_frame);
+        if self.selection_locked {
+            self.selected_frame -= n;
+        }
+    }
+
     pub fn push_undo(&mut self, action: Action) {
         if !action.is_empty() {
             self.undo_history.truncate(self.undo_index);
