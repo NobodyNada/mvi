@@ -150,6 +150,7 @@ impl<'a> Entry<'a> {
     }
 
     pub fn get_field<'f>(&self, field: &'f Field) -> FieldValue<'f> {
+        // FIXME: seen crash here when loading another movie while trace logger is open
         assert!(self
             .fields
             .fields
