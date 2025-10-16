@@ -1,3 +1,4 @@
+#![allow(clippy::mut_from_ref)]
 use std::{
     mem::{ManuallyDrop, MaybeUninit},
     sync::{

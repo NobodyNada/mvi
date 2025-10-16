@@ -520,7 +520,6 @@ impl Tas {
         }
     }
 
-    #[expect(clippy::comparison_chain)]
     pub fn select(&mut self, frame: u32) {
         if frame < self.selected_frame {
             self.select_prev(self.selected_frame - frame);

@@ -275,7 +275,7 @@ impl PianoRoll {
                                 }
                                 let frame = &tas.frame(row)[0..input_port.frame_size()];
                                 let pressed = if autofire {
-                                    (ui.time() * 10.) as u64 % 2 != 0
+                                    !((ui.time() * 10.) as u64).is_multiple_of(2)
                                 } else {
                                     input_port.read(frame, 0, index as u32) != 0
                                 };

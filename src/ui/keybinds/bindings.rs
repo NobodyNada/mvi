@@ -401,11 +401,9 @@ impl Keybinds {
             for device in tas::input::InputPort::all() {
                 // TODO: non-joypad/multitap support
                 let tas::input::InputPort::Joypad(joypad) = device;
-                let bindings = port_config.entry(device).or_insert_with(|| {
-                    std::iter::repeat(None)
-                        .take(joypad.buttons().len())
-                        .collect()
-                });
+                let bindings = port_config
+                    .entry(device)
+                    .or_insert_with(|| std::iter::repeat_n(None, joypad.buttons().len()).collect());
                 assert_eq!(bindings.len(), joypad.buttons().len());
 
                 self.controller_bindings[port_index].insert(

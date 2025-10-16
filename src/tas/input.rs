@@ -106,7 +106,7 @@ impl Joypad {
     }
 
     pub fn frame_size(&self) -> usize {
-        (self.buttons().len() + 7) / 8
+        self.buttons().len().div_ceil(8)
     }
 
     pub fn read(&self, data: &[u8], id: u32) -> bool {

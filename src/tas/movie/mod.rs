@@ -200,8 +200,7 @@ impl Movie {
         if len > self.len() {
             let frames_to_insert = len - self.len();
             self.data.extend(
-                std::iter::repeat(&self.default_pattern.data)
-                    .take(frames_to_insert as usize)
+                std::iter::repeat_n(&self.default_pattern.data, frames_to_insert as usize)
                     .flatten(),
             )
         }
@@ -352,9 +351,7 @@ impl Pattern {
         id: u32,
     ) -> &mut bool {
         let mask = Rc::make_mut(&mut self.buf).mask.get_or_insert_with(|| {
-            std::iter::repeat(true)
-                .take(Self::input_count(input_ports))
-                .collect()
+            std::iter::repeat_n(true, Self::input_count(input_ports)).collect()
         });
         &mut mask[Self::input_index(input_ports, port, index, id)]
     }
@@ -367,9 +364,7 @@ impl Pattern {
         id: u32,
     ) -> &mut bool {
         let af = Rc::make_mut(&mut self.buf).autofire.get_or_insert_with(|| {
-            std::iter::repeat(false)
-                .take(Self::input_count(input_ports))
-                .collect()
+            std::iter::repeat_n(false, Self::input_count(input_ports)).collect()
         });
         &mut af[Self::input_index(input_ports, port, index, id)]
     }
@@ -382,9 +377,7 @@ impl Pattern {
         id: u32,
     ) -> &mut bool {
         let ah = Rc::make_mut(&mut self.buf).autohold.get_or_insert_with(|| {
-            std::iter::repeat(false)
-                .take(Self::input_count(input_ports))
-                .collect()
+            std::iter::repeat_n(false, Self::input_count(input_ports)).collect()
         });
         &mut ah[Self::input_index(input_ports, port, index, id)]
     }

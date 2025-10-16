@@ -419,7 +419,7 @@ impl Greenzone {
                     .filter(|(&frame, _)| {
                         frame == 0 || full_histogram[log_priority(frame)] < full_threshold
                     })
-                    .last()
+                    .next_back()
                     .expect(
                         "will always have a parent because frame 0 is guaranteed to be present",
                     );

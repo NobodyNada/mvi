@@ -299,7 +299,7 @@ impl Ui {
                         format!(
                             "{} / {} kB",
                             progress.downloaded / 1000,
-                            (total + 999) / 1000
+                            total.div_ceil(1000)
                         ),
                     ),
                     None => (0., format!("{} kB", progress.downloaded)),

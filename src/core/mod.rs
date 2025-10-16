@@ -68,9 +68,7 @@ impl Frame {
         Frame {
             width,
             height,
-            buffer: std::iter::repeat([0, 0, 0, 255])
-                .take(width * height)
-                .collect(),
+            buffer: std::iter::repeat_n([0, 0, 0, 255], width * height).collect(),
         }
     }
 }
@@ -123,9 +121,8 @@ impl Core {
             (symbols().retro_get_system_av_info)(av_info.as_mut_ptr());
             let av_info = av_info.assume_init();
 
-            let savestate_buffer: Box<[u8]> = std::iter::repeat(0)
-                .take((symbols().retro_serialize_size)())
-                .collect();
+            let savestate_buffer: Box<[u8]> =
+                std::iter::repeat_n(0, (symbols().retro_serialize_size)()).collect();
 
             let trace_ctx = lock().trace_context;
             let trace_fields = if !trace_ctx.is_null() {
