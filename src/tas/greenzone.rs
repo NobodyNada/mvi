@@ -416,7 +416,7 @@ impl Greenzone {
                 let (parent_frame, _) = g
                     .full_states
                     .range(0..frame)
-                    .filter(|(&frame, _)| {
+                    .filter(|&(&frame, _)| {
                         frame == 0 || full_histogram[log_priority(frame)] < full_threshold
                     })
                     .next_back()

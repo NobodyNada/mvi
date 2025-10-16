@@ -1,4 +1,3 @@
-#![allow(clippy::mut_from_ref)]
 use std::{
     mem::{ManuallyDrop, MaybeUninit},
     sync::{
@@ -282,43 +281,46 @@ impl<T> RingBuffer<T> {
     /// as up to two contiguous slices.
     /// Safety: The caller must ensure only one writer accesses the buffer at a time, including
     /// from separate threads. The preexisting contents of the returned slices are undefined.
+    #[expect(clippy::mut_from_ref)]
     unsafe fn write_buffer(&self) -> (&mut [MaybeUninit<T>], &mut [MaybeUninit<T>]) {
-        // Load the writer position. Relaxed ordering is OK since we are guaranteed to be
-        // ordered after any previous writer.
-        let writer = self.writer.load(Ordering::Relaxed);
+        unsafe {
+            // Load the writer position. Relaxed ordering is OK since we are guaranteed to be
+            // ordered after any previous writer.
+            let writer = self.writer.load(Ordering::Relaxed);
 
-        // Load the reader position, with acquire ordering. This ensures all writes to the buffer
-        // are ordered after the completion of the previous read operation.
-        let reader = self.reader.load(Ordering::Acquire);
+            // Load the reader position, with acquire ordering. This ensures all writes to the buffer
+            // are ordered after the completion of the previous read operation.
+            let reader = self.reader.load(Ordering::Acquire);
 
-        if writer.abs_diff(reader) == self.capacity {
-            // The buffer is full.
-            return (&mut [], &mut []);
-        }
+            if writer.abs_diff(reader) == self.capacity {
+                // The buffer is full.
+                return (&mut [], &mut []);
+            }
 
-        // Now that we've established the buffer has space, wrap to within the range.
-        let writer = writer % self.capacity;
-        let reader = reader % self.capacity;
+            // Now that we've established the buffer has space, wrap to within the range.
+            let writer = writer % self.capacity;
+            let reader = reader % self.capacity;
 
-        if writer < reader {
-            (
-                // Just one slice, from the writer position to the reader position.
-                std::slice::from_raw_parts_mut(
-                    self.data.add(writer) as *mut MaybeUninit<T>,
-                    reader - writer,
-                ),
-                &mut [],
-            )
-        } else {
-            (
-                // Write from the writer position to the end of the buffer...
-                std::slice::from_raw_parts_mut(
-                    self.data.add(writer) as *mut MaybeUninit<T>,
-                    self.capacity - writer,
-                ),
-                // and from the start of the buffer to the reader position.
-                std::slice::from_raw_parts_mut(self.data as *mut MaybeUninit<T>, reader),
-            )
+            if writer < reader {
+                (
+                    // Just one slice, from the writer position to the reader position.
+                    std::slice::from_raw_parts_mut(
+                        self.data.add(writer) as *mut MaybeUninit<T>,
+                        reader - writer,
+                    ),
+                    &mut [],
+                )
+            } else {
+                (
+                    // Write from the writer position to the end of the buffer...
+                    std::slice::from_raw_parts_mut(
+                        self.data.add(writer) as *mut MaybeUninit<T>,
+                        self.capacity - writer,
+                    ),
+                    // and from the start of the buffer to the reader position.
+                    std::slice::from_raw_parts_mut(self.data as *mut MaybeUninit<T>, reader),
+                )
+            }
         }
     }
 
@@ -342,43 +344,46 @@ impl<T> RingBuffer<T> {
     /// as up to two contiguous slices.
     /// Safety: The caller must ensure only one reader accesses the buffer at a time, including
     /// from separate threads. If the elements need to be dropped, the caller must do so manually.
+    #[expect(clippy::mut_from_ref)]
     unsafe fn read_buffer(&self) -> (&mut [ManuallyDrop<T>], &mut [ManuallyDrop<T>]) {
-        // Load the reader position. Relaxed ordering is OK since we are guaranteed to be
-        // ordered after any previous reader.
-        let writer = self.writer.load(Ordering::Relaxed);
+        unsafe {
+            // Load the reader position. Relaxed ordering is OK since we are guaranteed to be
+            // ordered after any previous reader.
+            let writer = self.writer.load(Ordering::Relaxed);
 
-        // Load the writer position, with acquire ordering. This ensures all reads from the buffer
-        // are ordered after the completion of the previous write operation.
-        let reader = self.reader.load(Ordering::Acquire);
+            // Load the writer position, with acquire ordering. This ensures all reads from the buffer
+            // are ordered after the completion of the previous write operation.
+            let reader = self.reader.load(Ordering::Acquire);
 
-        if writer == reader {
-            // The buffer is empty.
-            return (&mut [], &mut []);
-        }
+            if writer == reader {
+                // The buffer is empty.
+                return (&mut [], &mut []);
+            }
 
-        // Now that we've established the buffer has data, wrap to within the range.
-        let writer = writer % self.capacity;
-        let reader = reader % self.capacity;
+            // Now that we've established the buffer has data, wrap to within the range.
+            let writer = writer % self.capacity;
+            let reader = reader % self.capacity;
 
-        if reader < writer {
-            (
-                // Just one slice, from the reader position to the writer position.
-                std::slice::from_raw_parts_mut(
-                    self.data.add(reader) as *mut ManuallyDrop<T>,
-                    writer - reader,
-                ),
-                &mut [],
-            )
-        } else {
-            (
-                // Read from the reader position to the end of the buffer...
-                std::slice::from_raw_parts_mut(
-                    self.data.add(reader) as *mut ManuallyDrop<T>,
-                    self.capacity - reader,
-                ),
-                // and from the start of the buffer to the writer position.
-                std::slice::from_raw_parts_mut(self.data as *mut ManuallyDrop<T>, writer),
-            )
+            if reader < writer {
+                (
+                    // Just one slice, from the reader position to the writer position.
+                    std::slice::from_raw_parts_mut(
+                        self.data.add(reader) as *mut ManuallyDrop<T>,
+                        writer - reader,
+                    ),
+                    &mut [],
+                )
+            } else {
+                (
+                    // Read from the reader position to the end of the buffer...
+                    std::slice::from_raw_parts_mut(
+                        self.data.add(reader) as *mut ManuallyDrop<T>,
+                        self.capacity - reader,
+                    ),
+                    // and from the start of the buffer to the writer position.
+                    std::slice::from_raw_parts_mut(self.data as *mut ManuallyDrop<T>, writer),
+                )
+            }
         }
     }
 

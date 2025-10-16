@@ -80,11 +80,11 @@ impl RamWatch {
             // Don't allow keydown events while the editor is open!
             ignore_events = true;
             super::Ui::set_popup_size(ui, [256., 256.]);
-            if let Some(_token) = ui
+            match ui
                 .modal_popup_config(ADD_POPUP)
                 .resizable(false)
                 .begin_popup()
-            {
+            { Some(_token) => {
                 // Focus on the name field when the editor is first opened.
                 if self.editor.should_focus {
                     self.editor.should_focus = false;
@@ -139,10 +139,10 @@ impl RamWatch {
                         self.editor.state = EditorState::Closed;
                     }
                 });
-            } else {
+            } _ => {
                 ui.open_popup(ADD_POPUP);
                 self.editor.should_focus = true;
-            }
+            }}
         } else {
             ignore_events = false;
         }

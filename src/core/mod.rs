@@ -163,7 +163,7 @@ impl Core {
         }
     }
 
-    pub fn lock(&mut self) -> impl DerefMut<Target = CoreImpl> {
+    pub fn lock(&mut self) -> impl DerefMut<Target = CoreImpl> + use<> {
         lock()
     }
 
@@ -303,13 +303,13 @@ impl PixelFormat {
         }
     }
 
-    unsafe fn read(&self, buf: *const c_void) -> [u8; 4] {
+    unsafe fn read(&self, buf: *const c_void) -> [u8; 4] { unsafe {
         let pixel: u32 = match self {
             PixelFormat::XRGB8888 => buf.cast::<u32>().read(),
             PixelFormat::XRGB1555 | PixelFormat::RGB565 => buf.cast::<u16>().read() as u32,
         };
         self.convert(pixel)
-    }
+    }}
 
     #[allow(clippy::identity_op)]
     #[rustfmt::skip]
@@ -360,7 +360,7 @@ impl TryFrom<retro_pixel_format> for PixelFormat {
 }
 
 impl CoreImpl {
-    unsafe fn load(path: &std::path::Path) -> Result<()> {
+    unsafe fn load(path: &std::path::Path) -> Result<()> { unsafe {
         let mut lock = CORE.lock().unwrap();
         assert!(lock.is_none(), "Only one core can be loaded at once");
 
@@ -401,7 +401,7 @@ impl CoreImpl {
 
         (symbols.retro_init)();
         Ok(())
-    }
+    }}
 
     pub fn retro_api_version(&self) -> u32 {
         unsafe { (symbols().retro_api_version)() }
@@ -500,7 +500,7 @@ impl CoreImpl {
     }
 }
 
-unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
+unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool { unsafe {
     let mut core = lock();
     match cmd {
         RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
@@ -508,7 +508,7 @@ unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
         RETRO_ENVIRONMENT_SET_TRACE_CONTEXT => core.set_trace_context(data.cast()),
         _ => false,
     }
-}
+}}
 
 unsafe extern "C" fn video_refresh_callback(
     data: *const c_void,
@@ -523,14 +523,14 @@ unsafe extern "C" fn audio_sample_callback(l: i16, r: i16) {
     lock().audio_callback(&[AudioFrame { l, r }]);
 }
 
-unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> usize {
+unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> usize { unsafe {
     lock().audio_callback(std::slice::from_raw_parts(data.cast(), frames));
     frames
-}
+}}
 
 unsafe extern "C" fn input_poll_callback() {}
 
-unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 {
+unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 { unsafe {
     let core = lock();
     assert!(!core.input.is_null());
     assert!(!core.input_ports.is_null());
@@ -550,4 +550,4 @@ unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, i
     } else {
         0
     }
-}
+}}

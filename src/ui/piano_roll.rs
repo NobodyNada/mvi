@@ -50,7 +50,7 @@ impl ScrollLock {
 }
 
 macro_rules! color {
-    [$r:expr, $g:expr, $b:expr] => {
+    [$r:expr_2021, $g:expr_2021, $b:expr_2021] => {
         [$r as f32 / 256., $g as f32 / 256., $b as f32 / 256., 1.]
     };
 }

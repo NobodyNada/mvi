@@ -227,11 +227,11 @@ impl Ui {
         if let Some(error) = &self.reported_error {
             ignore_events = true;
             const ID: &str = "Error";
-            if let Some(_token) = ui
+            match ui
                 .modal_popup_config(ID)
                 .flags(imgui::WindowFlags::ALWAYS_AUTO_RESIZE)
                 .begin_popup()
-            {
+            { Some(_token) => {
                 ui.text(format!("{}", error.error));
                 if ui.collapsing_header("Details", imgui::TreeNodeFlags::FRAMED) {
                     ui.text(format!("{:?}", error.error));
@@ -247,9 +247,9 @@ impl Ui {
                         ui.close_current_popup();
                     }
                 }
-            } else {
+            } _ => {
                 ui.open_popup(ID);
-            }
+            }}
             if error.is_fatal {
                 return;
             }
@@ -287,7 +287,7 @@ impl Ui {
             let download = self.download_progress.as_ref().unwrap();
             const ID: &str = "Download progress";
             Ui::set_popup_position(ui);
-            if let Some(_token) = ui.begin_modal_popup(ID) {
+            match ui.begin_modal_popup(ID) { Some(_token) => {
                 if completed {
                     ui.close_current_popup();
                 }
@@ -307,9 +307,9 @@ impl Ui {
                 imgui::ProgressBar::new(fraction)
                     .overlay_text(text)
                     .build(ui);
-            } else {
+            } _ => {
                 ui.open_popup(ID);
-            }
+            }}
 
             if completed {
                 self.download_progress = None;
@@ -321,16 +321,16 @@ impl Ui {
             const ID: &str = "Keybind Editor";
             Ui::set_popup_position(ui);
             Ui::set_popup_size(ui, ui.window_size());
-            if let Some(_token) = ui.begin_modal_popup(ID) {
+            match ui.begin_modal_popup(ID) { Some(_token) => {
                 if let Some(save) = editor.draw(ui, self.modifiers) {
                     let editor = self.keybind_editor.take().unwrap();
                     if save {
                         self.handle_error(|ui| editor.apply(&mut ui.keybinds));
                     }
                 }
-            } else {
+            } _ => {
                 ui.open_popup(ID);
-            }
+            }}
         }
 
         if self.tas.is_some() {

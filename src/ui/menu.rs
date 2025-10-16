@@ -210,7 +210,7 @@ impl Ui {
         const ID: &str = "Select Core";
         Ui::set_popup_position(ui);
         Ui::set_popup_size(ui, ui.window_size());
-        if let Some(_token) = ui.begin_modal_popup(ID) {
+        match ui.begin_modal_popup(ID) { Some(_token) => {
             if let Some(_token) = ui
                 .child_window("core_list")
                 .size([0., -ui.text_line_height_with_spacing() * 4.])
@@ -307,9 +307,9 @@ impl Ui {
                     (core_selector.callback)(self, &core_selector.selected_core_id.unwrap());
                 }
             });
-        } else {
+        } _ => {
             ui.open_popup(ID);
-        }
+        }}
 
         true
     }
@@ -456,7 +456,7 @@ impl Ui {
     pub(super) fn draw_hash_mismatch(&mut self, ui: &imgui::Ui) -> bool {
         if let Some(mismatch) = self.hash_mismatch.as_mut() {
             const ID: &str = "Hash mismatch";
-            if let Some(_token) = ui.begin_modal_popup(ID) {
+            match ui.begin_modal_popup(ID) { Some(_token) => {
                 ui.text(format!(
                     "The selected ROM '{}' is not the same ROM that the movie was created with.",
                     mismatch.rom_path.to_string_lossy()
@@ -490,9 +490,9 @@ impl Ui {
                     ui.close_current_popup();
                     self.hash_mismatch = None;
                 }
-            } else {
+            } _ => {
                 ui.open_popup(ID);
-            }
+            }}
             return true;
         }
         false

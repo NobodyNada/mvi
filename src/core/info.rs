@@ -149,7 +149,7 @@ impl CoreDb {
         id: String,
         progress: Weak<AtomicCell<Progress>>,
         force: bool,
-    ) -> impl Future<Output = Result<std::path::PathBuf>> {
+    ) -> impl Future<Output = Result<std::path::PathBuf>> + use<> {
         let url = self
             .cores
             .iter()

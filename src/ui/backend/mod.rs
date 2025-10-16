@@ -497,12 +497,12 @@ impl ViewportBackend {
         .cast()
     }
 
-    unsafe fn destroy_viewport_data(viewport: &mut imgui::Viewport) {
+    unsafe fn destroy_viewport_data(viewport: &mut imgui::Viewport) { unsafe {
         std::mem::drop(Box::from_raw(
             viewport.platform_user_data.cast::<ViewportData>(),
         ));
         viewport.platform_user_data = std::ptr::null_mut();
-    }
+    }}
 
     fn data(viewport: &mut imgui::Viewport) -> &mut ViewportData {
         unsafe {

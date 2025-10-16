@@ -163,7 +163,7 @@ impl Renderer {
         }
     }
 
-    fn _render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<impl GpuFuture> {
+    fn _render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<impl GpuFuture + use<>> {
         // Create a command buffer to store our rendering commands.
         let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
@@ -319,11 +319,11 @@ impl Renderer {
 
         // Submit the command buffer for execution after the next framebuffer is available, and the
         // previous frame finishes rendering.
-        let ready = if let Some(prev) = std::mem::take(&mut self.previous_frame) {
+        let ready = match std::mem::take(&mut self.previous_frame) { Some(prev) => {
             framebuffer.ready.join(prev).boxed()
-        } else {
+        } _ => {
             framebuffer.ready.boxed()
-        };
+        }};
         let inflight = command_buffer
             .build()?
             .execute_after(ready, self.context.graphics_queue().clone())?
@@ -636,11 +636,11 @@ impl Renderer {
 impl Frame<'_> {
     pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
         let inflight = self.renderer._render(target, draw_data)?;
-        self.inflight = if let Some(prev) = std::mem::take(&mut self.inflight) {
+        self.inflight = match std::mem::take(&mut self.inflight) { Some(prev) => {
             Some(prev.join(inflight).boxed())
-        } else {
+        } _ => {
             Some(inflight.boxed())
-        };
+        }};
         Ok(())
     }
 
