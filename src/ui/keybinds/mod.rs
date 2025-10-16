@@ -135,11 +135,10 @@ impl Keybinds {
     fn load_config(&mut self) -> KeybindConfiguration {
         let path = Self::config_path();
         let mut config = KeybindConfiguration::default();
-        if let Ok(file) = std::fs::File::open(path) {
-            if let Ok(c) = serde_json::from_reader(file) {
+        if let Ok(file) = std::fs::File::open(path)
+            && let Ok(c) = serde_json::from_reader(file) {
                 config = c;
             }
-        }
 
         self.register_keybinds(&mut config);
         config
@@ -296,11 +295,10 @@ impl Keybinds {
         tas: &mut Tas,
         _piano_roll: &mut PianoRoll,
     ) {
-        if let Some((port, index, id)) = self.get_input_binding(tas.movie().input_ports(), &key) {
-            if let Mode::Insert { pattern, action } | Mode::Replace { pattern, action } =
+        if let Some((port, index, id)) = self.get_input_binding(tas.movie().input_ports(), &key)
+            && let Mode::Insert { pattern, action } | Mode::Replace { pattern, action } =
                 &mut self.mode
-            {
-                if !pattern.autofire(tas.movie().input_ports(), port, index, id)
+                && !pattern.autofire(tas.movie().input_ports(), port, index, id)
                     && !pattern.autohold(tas.movie().input_ports(), port, index, id)
                     && pattern.read(tas.movie().input_ports(), port, index, id) != 0
                 {
@@ -310,8 +308,6 @@ impl Keybinds {
                         Self::write_input_change_to_action(tas, pattern, action)
                     }
                 }
-            }
-        }
     }
 
     fn write_input_change_to_action(tas: &mut Tas, pattern: &Pattern, action: &mut Option<Action>) {
@@ -336,11 +332,10 @@ impl Keybinds {
                     != *cursor + (previous.len() / pattern.buf.frame_size) as u32 - 1
             }
         };
-        if should_invalidate {
-            if let Some(action) = action.take() {
+        if should_invalidate
+            && let Some(action) = action.take() {
                 tas.push_undo(action);
             }
-        }
 
         let action = action.get_or_insert_with(|| Action {
             cursor: tas.selected_frame(),

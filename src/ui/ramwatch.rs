@@ -280,17 +280,16 @@ impl RamWatch {
 
     pub fn menu(&mut self, ui: &Ui, tas: &mut Tas) -> anyhow::Result<()> {
         ui.checkbox("Memory Watch", &mut self.opened);
-        if ui.menu_item("Import watches...") {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.menu_item("Import watches...")
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON file", &["json"])
                 .set_title("Select a memory watch file")
                 .pick_file()
             {
                 *tas.ramwatches_mut() = serde_json::from_reader(std::fs::File::open(path)?)?;
             }
-        }
-        if ui.menu_item("Export watches...") {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.menu_item("Export watches...")
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON file", &["json"])
                 .set_title("Select a memory watch file")
                 .set_file_name("ram_watch")
@@ -298,7 +297,6 @@ impl RamWatch {
             {
                 serde_json::to_writer_pretty(std::fs::File::create(path)?, tas.ramwatches_mut())?;
             }
-        }
 
         Ok(())
     }

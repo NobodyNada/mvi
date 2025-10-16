@@ -30,15 +30,14 @@ impl Ui {
                 if ui.menu_item("New Movie...") {
                     self.load_rom();
                 }
-                if ui.menu_item("Open Movie...") {
-                    if let Some(path) = rfd::FileDialog::new()
+                if ui.menu_item("Open Movie...")
+                    && let Some(path) = rfd::FileDialog::new()
                         .add_filter("mvi movie file", &["mvi"])
                         .set_title("Select a movie file")
                         .pick_file()
                     {
                         self.open_movie(path)
                     }
-                }
                 if !self.movie_cache.recents().is_empty() {
                     ui.separator();
                     ui.text_disabled("Recent Movies");
@@ -215,8 +214,7 @@ impl Ui {
                 .child_window("core_list")
                 .size([0., -ui.text_line_height_with_spacing() * 4.])
                 .begin()
-            {
-                if let Some(_token) = ui.begin_table(
+                && let Some(_token) = ui.begin_table(
                     "Available cores",
                     2 + core_selector.show_non_matching as usize,
                 ) {
@@ -282,7 +280,6 @@ impl Ui {
                         ui.table_next_row();
                     }
                 }
-            }
 
             ui.new_line();
 
@@ -406,11 +403,10 @@ impl Ui {
                 .unwrap_or_default();
 
             // Also include the extension of the ROM filename associated with the movie
-            if let Some((_, e)) = file.rom_filename.rsplit_once(".") {
-                if !extensions.iter().any(|ext| ext == e) {
+            if let Some((_, e)) = file.rom_filename.rsplit_once(".")
+                && !extensions.iter().any(|ext| ext == e) {
                     extensions.push(e.to_string());
                 }
-            }
             extensions.sort();
 
             rfd::FileDialog::new()

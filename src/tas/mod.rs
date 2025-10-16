@@ -297,12 +297,11 @@ impl Tas {
             } => {
                 while self.core_frame_fraction >= 1. {
                     self.core_frame_fraction -= 1.;
-                    if let Some(stop) = stop_at {
-                        if self.playback_cursor >= *stop {
+                    if let Some(stop) = stop_at
+                        && self.playback_cursor >= *stop {
                             run_mode = RunMode::Paused;
                             break;
                         }
-                    }
 
                     // If we're recording, write the user input.
                     match record_mode {

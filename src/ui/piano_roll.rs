@@ -261,8 +261,8 @@ impl PianoRoll {
 
                             for (index, text) in buttons.iter().enumerate() {
                                 let mut autofire = false;
-                                if row == tas.selected_frame() {
-                                    if let keybinds::Mode::Insert { pattern, .. }
+                                if row == tas.selected_frame()
+                                    && let keybinds::Mode::Insert { pattern, .. }
                                     | keybinds::Mode::Replace { pattern, .. } = keybinds.mode()
                                     {
                                         autofire = pattern.autofire(
@@ -272,7 +272,6 @@ impl PianoRoll {
                                             index as u32,
                                         );
                                     }
-                                }
                                 let frame = &tas.frame(row)[0..input_port.frame_size()];
                                 let pressed = if autofire {
                                     !((ui.time() * 10.) as u64).is_multiple_of(2)

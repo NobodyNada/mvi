@@ -359,11 +359,10 @@ impl Ui {
             self.piano_roll
                 .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
 
-            if let Some(trace) = &mut self.trace_debuger {
-                if !trace.draw(ui, self.tas.as_mut().unwrap()) {
+            if let Some(trace) = &mut self.trace_debuger
+                && !trace.draw(ui, self.tas.as_mut().unwrap()) {
                     self.trace_debuger = None;
                 }
-            }
         }
 
         self.ignore_events = ignore_events;
@@ -393,8 +392,8 @@ impl Ui {
                         winit::event::ElementState::Pressed => {
                             if let Some(editor) = self.keybind_editor.as_mut() {
                                 editor.key_down(key, self.modifiers);
-                            } else if let Some(tas) = &mut self.tas {
-                                if !self.ignore_events {
+                            } else if let Some(tas) = &mut self.tas
+                                && !self.ignore_events {
                                     self.keybinds.key_down(
                                         key,
                                         self.modifiers,
@@ -402,11 +401,10 @@ impl Ui {
                                         &mut self.piano_roll,
                                     )
                                 }
-                            }
                         }
                         winit::event::ElementState::Released => {
-                            if self.keybind_editor.is_none() {
-                                if let Some(tas) = &mut self.tas {
+                            if self.keybind_editor.is_none()
+                                && let Some(tas) = &mut self.tas {
                                     self.keybinds.key_up(
                                         key,
                                         self.modifiers,
@@ -414,7 +412,6 @@ impl Ui {
                                         &mut self.piano_roll,
                                     )
                                 }
-                            }
                         }
                     }
                 }
@@ -467,11 +464,10 @@ impl Ui {
             }
         });
 
-        if let Some(framebuffer) = &self.framebuffer {
-            if framebuffer.width != frame.width || framebuffer.height != frame.height {
+        if let Some(framebuffer) = &self.framebuffer
+            && (framebuffer.width != frame.width || framebuffer.height != frame.height) {
                 self.framebuffer = None;
             }
-        }
 
         // Create the framebuffer, if it does not already exist
         let framebuffer = self.framebuffer.get_or_insert_with(|| {

@@ -318,12 +318,11 @@ impl Greenzone {
         // that have not been invalidated by pending operations. latest_pending contains the latest
         // savestate that has been added by pending operations.
 
-        if let Some(pending) = latest_pending {
-            if pending.0 >= *delta.map(|d| d.0).unwrap_or(full.0) {
+        if let Some(pending) = latest_pending
+            && pending.0 >= *delta.map(|d| d.0).unwrap_or(full.0) {
                 // We have a pending state that is better than anything in the btree.
                 return (pending.0, SavestateRef::Full(pending.1.clone()));
             }
-        }
 
         if let Some(delta) = delta {
             (*delta.0, SavestateRef::Delta(delta.1.clone()))

@@ -150,8 +150,8 @@ impl KeybindEditor {
                     for (device, buttons) in port {
                         let tas::input::InputPort::Joypad(joypad) = device;
                         let device_name = format!("{device}");
-                        if ui.collapsing_header(&device_name, imgui::TreeNodeFlags::BULLET) {
-                            if let Some(_token) = ui.begin_table(device_name, 2) {
+                        if ui.collapsing_header(&device_name, imgui::TreeNodeFlags::BULLET)
+                            && let Some(_token) = ui.begin_table(device_name, 2) {
                                 ui.table_setup_column("Button");
                                 ui.table_setup_column("Key Binding");
                                 ui.table_headers_row();
@@ -190,7 +190,6 @@ impl KeybindEditor {
                                     }
                                 }
                             }
-                        }
                     }
                 }
             }
@@ -216,8 +215,8 @@ impl KeybindEditor {
                     RecordTarget::Insert as fn(String) -> RecordTarget,
                 ),
             ] {
-                if ui.collapsing_header(label, imgui::TreeNodeFlags::FRAMED) {
-                    if let Some(_token) = ui.begin_table(label, 2) {
+                if ui.collapsing_header(label, imgui::TreeNodeFlags::FRAMED)
+                    && let Some(_token) = ui.begin_table(label, 2) {
                         ui.table_setup_column("Action");
                         ui.table_setup_column("Key Binding");
                         ui.table_headers_row();
@@ -247,7 +246,6 @@ impl KeybindEditor {
                             ui.table_next_row();
                         }
                     }
-                }
             }
         }
 
