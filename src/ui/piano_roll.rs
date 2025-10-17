@@ -1,12 +1,6 @@
-use std::rc::Rc;
-
 use imgui::{ListClipper, Ui};
 
-use crate::tas::{
-    input::InputPort,
-    movie::{Pattern, PatternBuf},
-    Action, ActionKind, Tas,
-};
+use crate::tas::{Tas, edit::ActionHandle, input::InputPort};
 
 use super::keybinds;
 
@@ -27,7 +21,6 @@ pub enum ScrollLock {
     Bottom,
 }
 
-#[derive(PartialEq, Eq)]
 pub enum DragMode {
     Playback,
     Selection,
@@ -36,6 +29,7 @@ pub enum DragMode {
         start: u32,
         end: u32,
         autofire: bool,
+        action: ActionHandle,
     },
 }
 
@@ -82,69 +76,7 @@ impl PianoRoll {
 
     pub fn draw(&mut self, ui: &Ui, tas: &mut Tas, keybinds: &keybinds::Keybinds) {
         if !ui.is_mouse_down(imgui::MouseButton::Left) {
-            #[expect(clippy::single_match)]
-            match self.drag_mode.take() {
-                Some(DragMode::Input {
-                    index,
-                    start,
-                    end,
-                    autofire,
-                }) => {
-                    // Create an undo action toggling all inputs
-                    // between 'start' and 'end' inclusive.
-                    let len = start.abs_diff(end) + 1;
-                    let frame_size = tas.movie().frame_size();
-                    let mut previous = Vec::with_capacity(frame_size * len as usize);
-                    let mut pattern_buf = Vec::with_capacity(frame_size * len as usize);
-                    // TODO: multi-input support
-                    let input_port = tas.movie().input_ports()[0];
-
-                    for i in start.min(end)..=start.max(end) {
-                        if autofire && (i.abs_diff(start)) % 2 != 0 {
-                            continue;
-                        }
-                        let frame = tas.movie().frame(i);
-                        let frame_start = previous.len();
-                        pattern_buf.extend_from_slice(frame);
-                        previous.extend_from_slice(frame);
-                        input_port.write(
-                            &mut previous[frame_start..],
-                            0,
-                            index,
-                            (input_port.read(frame, 0, index) == 0) as i16,
-                        );
-                    }
-
-                    let mut mask = Vec::new();
-                    mask.resize(
-                        tas.movie()
-                            .input_ports()
-                            .iter()
-                            .map(InputPort::total_inputs)
-                            .sum::<u32>() as usize,
-                        false,
-                    );
-                    mask[index as usize] = true; // TODO: multi-input support
-
-                    tas.push_undo(Action {
-                        cursor: start.min(end),
-                        kind: ActionKind::Apply {
-                            pattern: Pattern {
-                                buf: Rc::new(PatternBuf {
-                                    data: pattern_buf,
-                                    frame_size,
-                                    mask: Some(mask),
-                                    autofire: None,
-                                    autohold: None,
-                                }),
-                                offset: 0,
-                            },
-                            previous,
-                        },
-                    })
-                }
-                _ => {}
-            }
+            self.drag_mode = None;
         }
 
         let autofire_pressed =
@@ -239,7 +171,7 @@ impl PianoRoll {
 
                             ui.text_colored(frameno_color, format!("{marker}"));
                             if ui.is_item_clicked()
-                                || self.drag_mode == Some(DragMode::Playback)
+                                || matches!(self.drag_mode, Some(DragMode::Playback))
                                     && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                             {
                                 self.drag_mode = Some(DragMode::Playback);
@@ -252,7 +184,7 @@ impl PianoRoll {
                                 format!("{row:width$} ", width = number_column_width),
                             );
                             if ui.is_item_clicked()
-                                || self.drag_mode == Some(DragMode::Selection)
+                                || matches!(self.drag_mode, Some(DragMode::Selection))
                                     && ui.is_mouse_hovering_rect(frame_rect[0], frame_rect[1])
                             {
                                 self.drag_mode = Some(DragMode::Selection);
@@ -264,14 +196,14 @@ impl PianoRoll {
                                 if row == tas.selected_frame()
                                     && let keybinds::Mode::Insert { pattern, .. }
                                     | keybinds::Mode::Replace { pattern, .. } = keybinds.mode()
-                                    {
-                                        autofire = pattern.autofire(
-                                            tas.movie().input_ports(),
-                                            0,
-                                            0,
-                                            index as u32,
-                                        );
-                                    }
+                                {
+                                    autofire = pattern.autofire(
+                                        tas.movie().input_ports(),
+                                        0,
+                                        0,
+                                        index as u32,
+                                    );
+                                }
                                 let frame = &tas.frame(row)[0..input_port.frame_size()];
                                 let pressed = if autofire {
                                     !((ui.time() * 10.) as u64).is_multiple_of(2)
@@ -288,19 +220,28 @@ impl PianoRoll {
                                 ui.text_colored(color, text);
 
                                 if ui.is_item_clicked() {
+                                    let mut action = tas.start_nonrepeatable();
+                                    let mut frame = tas.frame(row).to_owned();
+                                    input_port.write(
+                                        &mut frame[0..input_port.frame_size()],
+                                        0,
+                                        index as u32,
+                                        !pressed as i16,
+                                    );
+                                    action.replace_frame(tas, row, &frame);
                                     self.drag_mode = Some(DragMode::Input {
                                         index: index as u32,
                                         start: row,
                                         end: row,
                                         autofire: autofire_pressed,
+                                        action,
                                     });
-                                    let frame = &mut tas.frame_mut(row)[0..input_port.frame_size()];
-                                    input_port.write(frame, 0, index as u32, !pressed as i16);
                                 } else if let Some(DragMode::Input {
                                     index,
                                     start,
                                     end,
                                     autofire,
+                                    action,
                                 }) = &mut self.drag_mode
                                 {
                                     #[expect(clippy::comparison_chain)]
@@ -347,7 +288,7 @@ impl PianoRoll {
 
                                         let min;
                                         let max;
-                                        if *end < row {
+                                        let iter = if *end < row {
                                             if contracting {
                                                 min = *end
                                             } else {
@@ -358,6 +299,8 @@ impl PianoRoll {
                                             } else {
                                                 max = row;
                                             }
+
+                                            itertools::Either::Left(min..max)
                                         } else {
                                             if contracting {
                                                 max = *end + 1;
@@ -369,21 +312,29 @@ impl PianoRoll {
                                             } else {
                                                 min = row + 1;
                                             }
+                                            // Iterate in order away from the selection so that the
+                                            // undo logic doesn't see non-adjacent edits.
+                                            itertools::Either::Right((min..max).rev())
                                         };
-                                        for i in min..max {
-                                            if i == *start
-                                                || (*autofire && (i.abs_diff(*start)) % 2 != 0)
-                                            {
+                                        for i in iter {
+                                            if i == *start {
                                                 continue;
                                             }
-                                            let frame =
-                                                &mut tas.frame_mut(i)[0..input_port.frame_size()];
-                                            input_port.write(
-                                                frame,
+                                            let mut frame = tas.frame(i).to_owned();
+                                            let value = input_port.read(
+                                                &frame[0..input_port.frame_size()],
                                                 0,
                                                 *index,
-                                                (input_port.read(frame, 0, *index) == 0) as i16,
-                                            );
+                                            ) == 0;
+                                            if !*autofire || (i.abs_diff(*start)) % 2 == 0 {
+                                                input_port.write(
+                                                    &mut frame[0..input_port.frame_size()],
+                                                    0,
+                                                    *index,
+                                                    value as i16,
+                                                );
+                                            }
+                                            action.replace_frame(tas, i, &frame);
                                         }
                                         *end = row;
                                     }
@@ -392,14 +343,19 @@ impl PianoRoll {
                                         *autofire = autofire_pressed;
                                         for i in (*start).min(*end)..=(*start).max(*end) {
                                             if i.abs_diff(*start) % 2 != 0 {
-                                                let frame = &mut tas.frame_mut(i)
-                                                    [0..input_port.frame_size()];
-                                                input_port.write(
-                                                    frame,
+                                                let mut frame = tas.frame(i).to_owned();
+                                                let value = input_port.read(
+                                                    &frame[0..input_port.frame_size()],
                                                     0,
                                                     *index,
-                                                    (input_port.read(frame, 0, *index) == 0) as i16,
+                                                ) == 0;
+                                                input_port.write(
+                                                    &mut frame[0..input_port.frame_size()],
+                                                    0,
+                                                    *index,
+                                                    value as i16,
                                                 );
+                                                action.replace_frame(tas, i, &frame);
                                             }
                                         }
                                     }

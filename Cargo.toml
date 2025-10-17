@@ -21,6 +21,7 @@ flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] 
 
 imgui = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f7f11363e62f09aa0e1288a17800e505860486", features = ["docking", "tables-api"] }
 imgui-winit-support = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f7f11363e62f09aa0e1288a17800e505860486" }
+itertools = "0.14.0"
 
 libloading = "0.8.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
