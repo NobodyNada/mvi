@@ -3,14 +3,14 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use anyhow::{anyhow, Context, Result};
-use imgui::{internal::RawWrapper, DrawData, DrawIdx, FontAtlasFlags, TextureId};
+use anyhow::{Context, Result, anyhow};
+use imgui::{DrawData, DrawIdx, FontAtlasFlags, TextureId, internal::RawWrapper};
 use smallvec::smallvec;
 use vk::{
     command_buffer::PrimaryCommandBufferAbstract,
     pipeline::{
-        graphics::vertex_input::{Vertex, VertexDefinition},
         Pipeline,
+        graphics::vertex_input::{Vertex, VertexDefinition},
     },
     sync::GpuFuture,
 };
@@ -22,7 +22,7 @@ use self::shaders::DrawVert;
 /// The renderer structure.
 pub struct Renderer {
     /// The Vulkan context, holding our instance, device, queue, etc.
-    context: VulkanoContext,
+    context: Arc<VulkanoContext>,
     /// The format of the color buffer.
     color_format: vk::format::Format,
 
@@ -31,10 +31,10 @@ pub struct Renderer {
     /// Our graphics pipeline, specifying the settings and shaders to use
     /// to transform vertex attributes into pixels on the screen.
     pipeline: Arc<vk::pipeline::GraphicsPipeline>,
-    command_buffer_allocator: vk::command_buffer::allocator::StandardCommandBufferAllocator,
+    command_buffer_allocator: Arc<vk::command_buffer::allocator::StandardCommandBufferAllocator>,
 
     /// The descriptor set allocator.
-    descriptor_set_allocator: vk::descriptor_set::allocator::StandardDescriptorSetAllocator,
+    descriptor_set_allocator: Arc<vk::descriptor_set::allocator::StandardDescriptorSetAllocator>,
 
     /// The descriptor set layout binding our texture image and sampler.
     sampler_descriptor_set_layout: Arc<vk::descriptor_set::layout::DescriptorSetLayout>,
@@ -69,7 +69,7 @@ pub struct Target {
 
 pub struct Texture {
     pub id: TextureId,
-    descriptor: Arc<vk::descriptor_set::PersistentDescriptorSet>,
+    descriptor: Arc<vk::descriptor_set::DescriptorSet>,
 }
 
 pub struct Frame<'a> {
@@ -149,7 +149,7 @@ impl Renderer {
     }
     pub fn command_buffer_allocator(
         &self,
-    ) -> &vk::command_buffer::allocator::StandardCommandBufferAllocator {
+    ) -> &Arc<vk::command_buffer::allocator::StandardCommandBufferAllocator> {
         &self.command_buffer_allocator
     }
 
@@ -163,10 +163,14 @@ impl Renderer {
         }
     }
 
-    fn _render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<impl GpuFuture + use<>> {
+    fn _render(
+        &mut self,
+        target: &mut Target,
+        draw_data: &DrawData,
+    ) -> Result<impl GpuFuture + use<>> {
         // Create a command buffer to store our rendering commands.
         let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+            self.command_buffer_allocator.clone(),
             self.context.graphics_queue().queue_family_index(),
             vk::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
@@ -296,13 +300,15 @@ impl Renderer {
                         )?;
 
                         // Draw the thing.
-                        command_buffer.draw_indexed(
-                            count as u32,
-                            1,
-                            idx_offset as u32,
-                            vtx_offset as i32,
-                            0,
-                        )?;
+                        unsafe {
+                            command_buffer.draw_indexed(
+                                count as u32,
+                                1,
+                                idx_offset as u32,
+                                vtx_offset as i32,
+                                0,
+                            )?;
+                        }
                     }
                     imgui::DrawCmd::ResetRenderState => {}
                     imgui::DrawCmd::RawCallback { callback, raw_cmd } => unsafe {
@@ -319,23 +325,19 @@ impl Renderer {
 
         // Submit the command buffer for execution after the next framebuffer is available, and the
         // previous frame finishes rendering.
-        let ready = match std::mem::take(&mut self.previous_frame) { Some(prev) => {
-            framebuffer.ready.join(prev).boxed()
-        } _ => {
-            framebuffer.ready.boxed()
-        }};
+        let ready = match std::mem::take(&mut self.previous_frame) {
+            Some(prev) => framebuffer.ready.join(prev).boxed(),
+            _ => framebuffer.ready.boxed(),
+        };
         let inflight = command_buffer
             .build()?
             .execute_after(ready, self.context.graphics_queue().clone())?
             .then_swapchain_present(
                 self.context.graphics_queue().clone(),
-                vk::swapchain::SwapchainPresentInfo {
-                    present_id: Some(self.frame_id.try_into().unwrap()),
-                    ..vk::swapchain::SwapchainPresentInfo::swapchain_image_index(
-                        framebuffer.swapchain.clone(),
-                        framebuffer.index as u32,
-                    )
-                },
+                vk::swapchain::SwapchainPresentInfo::swapchain_image_index(
+                    framebuffer.swapchain.clone(),
+                    framebuffer.index as u32,
+                ),
             );
         inflight.flush()?;
 
@@ -347,7 +349,7 @@ impl Renderer {
 
     /// Initializes all rendering resources.
     pub fn new(
-        context: VulkanoContext,
+        context: Arc<VulkanoContext>,
         surface: &Arc<vk::swapchain::Surface>,
         imgui: &mut imgui::Context,
     ) -> Result<Self> {
@@ -398,20 +400,22 @@ impl Renderer {
         );
 
         // Now let's set up our descriptor sets.
-        let descriptor_set_allocator =
+        let descriptor_set_allocator = Arc::new(
             vk::descriptor_set::allocator::StandardDescriptorSetAllocator::new(
                 context.device().clone(),
                 vk::descriptor_set::allocator::StandardDescriptorSetAllocatorCreateInfo::default(),
-            );
+            ),
+        );
 
         // Create a command buffer so we can upload our font texture.
-        let command_buffer_allocator =
+        let command_buffer_allocator = Arc::new(
             vk::command_buffer::allocator::StandardCommandBufferAllocator::new(
                 context.device().clone(),
                 Default::default(),
-            );
+            ),
+        );
         let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
-            &command_buffer_allocator,
+            command_buffer_allocator.clone(),
             context.graphics_queue().queue_family_index(),
             vk::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
@@ -518,9 +522,7 @@ impl Renderer {
             vk::pipeline::graphics::GraphicsPipelineCreateInfo {
                 stages,
                 // Pass the inputs through our vertex shader
-                vertex_input_state: Some(
-                    shaders::DrawVert::per_vertex().definition(&vs.info().input_interface)?,
-                ),
+                vertex_input_state: Some(shaders::DrawVert::per_vertex().definition(&vs)?),
                 rasterization_state: Some(Default::default()),
                 input_assembly_state: Some(Default::default()),
                 // Do not use depth or stencil testing.
@@ -559,7 +561,7 @@ impl Renderer {
         let font_texture = Self::_create_texture(
             Self::FONT_TEXTURE_ID,
             font_image,
-            &descriptor_set_allocator,
+            descriptor_set_allocator.clone(),
             sampler_descriptor_set_layout.clone(),
         )?;
         let textures = HashMap::from_iter([(Self::FONT_TEXTURE_ID, Arc::downgrade(&font_texture))]);
@@ -604,7 +606,7 @@ impl Renderer {
         let texture = Self::_create_texture(
             id,
             image_view,
-            &self.descriptor_set_allocator,
+            self.descriptor_set_allocator.clone(),
             self.sampler_descriptor_set_layout.clone(),
         )?;
 
@@ -616,12 +618,14 @@ impl Renderer {
     fn _create_texture(
         id: TextureId,
         image_view: Arc<vk::image::view::ImageView>,
-        descriptor_set_allocator: &vk::descriptor_set::allocator::StandardDescriptorSetAllocator,
+        descriptor_set_allocator: Arc<
+            vk::descriptor_set::allocator::StandardDescriptorSetAllocator,
+        >,
         sampler_descriptor_set_layout: Arc<vk::descriptor_set::layout::DescriptorSetLayout>,
     ) -> Result<Arc<Texture>> {
         Ok(Arc::new(Texture {
             id,
-            descriptor: vk::descriptor_set::PersistentDescriptorSet::new(
+            descriptor: vk::descriptor_set::DescriptorSet::new(
                 descriptor_set_allocator,
                 sampler_descriptor_set_layout,
                 [vk::descriptor_set::WriteDescriptorSet::image_view(
@@ -636,11 +640,10 @@ impl Renderer {
 impl Frame<'_> {
     pub fn render(&mut self, target: &mut Target, draw_data: &DrawData) -> Result<()> {
         let inflight = self.renderer._render(target, draw_data)?;
-        self.inflight = match std::mem::take(&mut self.inflight) { Some(prev) => {
-            Some(prev.join(inflight).boxed())
-        } _ => {
-            Some(inflight.boxed())
-        }};
+        self.inflight = match std::mem::take(&mut self.inflight) {
+            Some(prev) => Some(prev.join(inflight).boxed()),
+            _ => Some(inflight.boxed()),
+        };
         Ok(())
     }
 

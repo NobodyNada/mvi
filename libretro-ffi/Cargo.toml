@@ -9,4 +9,4 @@ edition = "2021"
 zerocopy = { version = "0.8.20", features = ["derive"] }
 
 [build-dependencies]
-bindgen = "0.66.1"
+bindgen = "0.72.1"

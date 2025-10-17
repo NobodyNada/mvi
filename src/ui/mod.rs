@@ -1,6 +1,6 @@
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
-use anyhow::{anyhow, bail, Error, Result};
+use anyhow::{Error, Result, anyhow, bail};
 use crossbeam::atomic::AtomicCell;
 use vk::{command_buffer::PrimaryCommandBufferAbstract, sync::GpuFuture};
 use vulkano as vk;
@@ -111,8 +111,8 @@ pub fn run() -> Result<()> {
 
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     backend::run(
-        || {
-            |event, _imgui, _window| {
+        move || {
+            move |event, _imgui, _window| {
                 _ = event_tx.send(event);
             }
         },
@@ -231,25 +231,28 @@ impl Ui {
                 .modal_popup_config(ID)
                 .flags(imgui::WindowFlags::ALWAYS_AUTO_RESIZE)
                 .begin_popup()
-            { Some(_token) => {
-                ui.text(format!("{}", error.error));
-                if ui.collapsing_header("Details", imgui::TreeNodeFlags::FRAMED) {
-                    ui.text(format!("{:?}", error.error));
-                }
+            {
+                Some(_token) => {
+                    ui.text(format!("{}", error.error));
+                    if ui.collapsing_header("Details", imgui::TreeNodeFlags::FRAMED) {
+                        ui.text(format!("{:?}", error.error));
+                    }
 
-                #[expect(clippy::collapsible_else_if)]
-                if error.is_fatal {
-                    if ui.button("Exit") {
-                        std::process::exit(1);
-                    }
-                } else {
-                    if ui.button("Close") {
-                        ui.close_current_popup();
+                    #[expect(clippy::collapsible_else_if)]
+                    if error.is_fatal {
+                        if ui.button("Exit") {
+                            std::process::exit(1);
+                        }
+                    } else {
+                        if ui.button("Close") {
+                            ui.close_current_popup();
+                        }
                     }
                 }
-            } _ => {
-                ui.open_popup(ID);
-            }}
+                _ => {
+                    ui.open_popup(ID);
+                }
+            }
             if error.is_fatal {
                 return;
             }
@@ -287,29 +290,32 @@ impl Ui {
             let download = self.download_progress.as_ref().unwrap();
             const ID: &str = "Download progress";
             Ui::set_popup_position(ui);
-            match ui.begin_modal_popup(ID) { Some(_token) => {
-                if completed {
-                    ui.close_current_popup();
-                }
-                ui.text(format!("Downloading {}...", download.item.name()));
-                let progress = download.progress.load();
-                let (fraction, text) = match progress.total {
-                    Some(total) => (
-                        progress.downloaded as f32 / total as f32,
-                        format!(
-                            "{} / {} kB",
-                            progress.downloaded / 1000,
-                            total.div_ceil(1000)
+            match ui.begin_modal_popup(ID) {
+                Some(_token) => {
+                    if completed {
+                        ui.close_current_popup();
+                    }
+                    ui.text(format!("Downloading {}...", download.item.name()));
+                    let progress = download.progress.load();
+                    let (fraction, text) = match progress.total {
+                        Some(total) => (
+                            progress.downloaded as f32 / total as f32,
+                            format!(
+                                "{} / {} kB",
+                                progress.downloaded / 1000,
+                                total.div_ceil(1000)
+                            ),
                         ),
-                    ),
-                    None => (0., format!("{} kB", progress.downloaded)),
-                };
-                imgui::ProgressBar::new(fraction)
-                    .overlay_text(text)
-                    .build(ui);
-            } _ => {
-                ui.open_popup(ID);
-            }}
+                        None => (0., format!("{} kB", progress.downloaded)),
+                    };
+                    imgui::ProgressBar::new(fraction)
+                        .overlay_text(text)
+                        .build(ui);
+                }
+                _ => {
+                    ui.open_popup(ID);
+                }
+            }
 
             if completed {
                 self.download_progress = None;
@@ -321,16 +327,19 @@ impl Ui {
             const ID: &str = "Keybind Editor";
             Ui::set_popup_position(ui);
             Ui::set_popup_size(ui, ui.window_size());
-            match ui.begin_modal_popup(ID) { Some(_token) => {
-                if let Some(save) = editor.draw(ui, self.modifiers) {
-                    let editor = self.keybind_editor.take().unwrap();
-                    if save {
-                        self.handle_error(|ui| editor.apply(&mut ui.keybinds));
+            match ui.begin_modal_popup(ID) {
+                Some(_token) => {
+                    if let Some(save) = editor.draw(ui, self.modifiers) {
+                        let editor = self.keybind_editor.take().unwrap();
+                        if save {
+                            self.handle_error(|ui| editor.apply(&mut ui.keybinds));
+                        }
                     }
                 }
-            } _ => {
-                ui.open_popup(ID);
-            }}
+                _ => {
+                    ui.open_popup(ID);
+                }
+            }
         }
 
         if self.tas.is_some() {
@@ -360,63 +369,51 @@ impl Ui {
                 .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
 
             if let Some(trace) = &mut self.trace_debuger
-                && !trace.draw(ui, self.tas.as_mut().unwrap()) {
-                    self.trace_debuger = None;
-                }
+                && !trace.draw(ui, self.tas.as_mut().unwrap())
+            {
+                self.trace_debuger = None;
+            }
         }
 
         self.ignore_events = ignore_events;
     }
 
-    fn handle_event(&mut self, event: winit::event::Event<()>) {
-        #[expect(clippy::single_match)]
+    fn handle_event(&mut self, event: winit::event::WindowEvent) {
         match event {
-            winit::event::Event::WindowEvent {
-                window_id: _,
-                event: e,
-            } => match e {
-                winit::event::WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
-                winit::event::WindowEvent::KeyboardInput {
-                    event: e @ winit::event::KeyEvent { state, .. },
-                    ..
-                } => {
-                    let key = e.key_without_modifiers();
-                    if let winit::keyboard::Key::Named(
-                        NamedKey::Control | NamedKey::Shift | NamedKey::Super | NamedKey::Alt,
-                    ) = key
-                    {
-                        // These are handled by ModifiersChanged
-                        return;
-                    }
-                    match state {
-                        winit::event::ElementState::Pressed => {
-                            if let Some(editor) = self.keybind_editor.as_mut() {
-                                editor.key_down(key, self.modifiers);
-                            } else if let Some(tas) = &mut self.tas
-                                && !self.ignore_events {
-                                    self.keybinds.key_down(
-                                        key,
-                                        self.modifiers,
-                                        tas,
-                                        &mut self.piano_roll,
-                                    )
-                                }
+            winit::event::WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            winit::event::WindowEvent::KeyboardInput {
+                event: e @ winit::event::KeyEvent { state, .. },
+                ..
+            } => {
+                let key = e.key_without_modifiers();
+                if let winit::keyboard::Key::Named(
+                    NamedKey::Control | NamedKey::Shift | NamedKey::Super | NamedKey::Alt,
+                ) = key
+                {
+                    // These are handled by ModifiersChanged
+                    return;
+                }
+                match state {
+                    winit::event::ElementState::Pressed => {
+                        if let Some(editor) = self.keybind_editor.as_mut() {
+                            editor.key_down(key, self.modifiers);
+                        } else if let Some(tas) = &mut self.tas
+                            && !self.ignore_events
+                        {
+                            self.keybinds
+                                .key_down(key, self.modifiers, tas, &mut self.piano_roll)
                         }
-                        winit::event::ElementState::Released => {
-                            if self.keybind_editor.is_none()
-                                && let Some(tas) = &mut self.tas {
-                                    self.keybinds.key_up(
-                                        key,
-                                        self.modifiers,
-                                        tas,
-                                        &mut self.piano_roll,
-                                    )
-                                }
+                    }
+                    winit::event::ElementState::Released => {
+                        if self.keybind_editor.is_none()
+                            && let Some(tas) = &mut self.tas
+                        {
+                            self.keybinds
+                                .key_up(key, self.modifiers, tas, &mut self.piano_roll)
                         }
                     }
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
@@ -465,9 +462,10 @@ impl Ui {
         });
 
         if let Some(framebuffer) = &self.framebuffer
-            && (framebuffer.width != frame.width || framebuffer.height != frame.height) {
-                self.framebuffer = None;
-            }
+            && (framebuffer.width != frame.width || framebuffer.height != frame.height)
+        {
+            self.framebuffer = None;
+        }
 
         // Create the framebuffer, if it does not already exist
         let framebuffer = self.framebuffer.get_or_insert_with(|| {
@@ -525,7 +523,7 @@ impl Ui {
         // Upload the frame to the GPU
         framebuffer.buffer.write().unwrap()[..frame.buffer.len()].copy_from_slice(&frame.buffer);
         let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
-            renderer.command_buffer_allocator(),
+            renderer.command_buffer_allocator().clone(),
             renderer.context().graphics_queue().queue_family_index(),
             vk::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )

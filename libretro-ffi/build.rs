@@ -17,7 +17,7 @@ fn main() {
         .header("src/wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .parse_callbacks(Box::new(DeriveZerocopy))
         // Finish the builder and generate the bindings.
         .generate()
