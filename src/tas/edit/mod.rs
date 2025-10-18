@@ -270,6 +270,7 @@ impl ActionHandle {
             );
         }
         tas.movie.frame_mut(idx).copy_from_slice(new);
+        tas.invalidate(idx);
     }
 
     fn resolve<'a>(&'a mut self, tas: &'a mut Tas) -> Option<&'a mut Action> {
