@@ -60,7 +60,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
 use crate::core::{DeltaSavestate, Savestate, SavestateRef};
@@ -319,10 +319,11 @@ impl Greenzone {
         // savestate that has been added by pending operations.
 
         if let Some(pending) = latest_pending
-            && pending.0 >= *delta.map(|d| d.0).unwrap_or(full.0) {
-                // We have a pending state that is better than anything in the btree.
-                return (pending.0, SavestateRef::Full(pending.1.clone()));
-            }
+            && pending.0 >= *delta.map(|d| d.0).unwrap_or(full.0)
+        {
+            // We have a pending state that is better than anything in the btree.
+            return (pending.0, SavestateRef::Full(pending.1.clone()));
+        }
 
         if let Some(delta) = delta {
             (*delta.0, SavestateRef::Delta(delta.1.clone()))
@@ -378,6 +379,7 @@ impl Greenzone {
                 while full_states.peek().is_some_and(|(f, _)| *f < frame) {
                     full = full_states.next().unwrap().1;
                 }
+                // FIXME: seen crash here
                 assert!(state.parent_is(full));
             }
 

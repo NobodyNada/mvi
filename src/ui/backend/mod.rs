@@ -408,15 +408,17 @@ fn render_thread<E, R>(
                         .add_mouse_pos_event([logical.x as f32, logical.y as f32])
                 }
                 e => {
-                    // yikes...
-                    platform.handle_event(
-                        imgui.io_mut(),
-                        main_window,
-                        &Event::WindowEvent::<()> {
-                            window_id: main_window.id(),
-                            event: e,
-                        },
-                    );
+                    if window_id != main_window_id {
+                        // yikes...
+                        platform.handle_event(
+                            imgui.io_mut(),
+                            main_window,
+                            &Event::WindowEvent::<()> {
+                                window_id: main_window_id,
+                                event: e,
+                            },
+                        );
+                    }
                 }
             }
         }

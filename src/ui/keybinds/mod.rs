@@ -334,7 +334,10 @@ impl Keybinds {
 
     fn toggle_playback(&mut self, tas: &mut Tas) {
         let mode = match tas.run_mode() {
-            tas::RunMode::Running { .. } => tas::RunMode::Paused,
+            tas::RunMode::Running { .. } => {
+                tas.select(tas.playback_frame());
+                tas::RunMode::Paused
+            }
             tas::RunMode::Paused => tas::RunMode::Running {
                 stop_at: None,
                 record_mode: match &mut self.mode {
