@@ -417,10 +417,9 @@ impl Greenzone {
                 let (parent_frame, _) = g
                     .full_states
                     .range(0..frame)
-                    .filter(|&(&frame, _)| {
+                    .rfind(|&(&frame, _)| {
                         frame == 0 || full_histogram[log_priority(frame)] < full_threshold
                     })
-                    .next_back()
                     .expect(
                         "will always have a parent because frame 0 is guaranteed to be present",
                     );

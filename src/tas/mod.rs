@@ -46,19 +46,14 @@ pub struct Tas {
     trace: Option<trace::Trace>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum RunMode {
     Running {
         stop_at: Option<u32>,
         record_mode: RecordMode,
     },
+    #[default]
     Paused,
-}
-
-impl Default for RunMode {
-    fn default() -> Self {
-        Self::Paused
-    }
 }
 
 #[derive(Debug)]
