@@ -182,7 +182,15 @@ impl Core {
             let mut core = self.lock();
             core.input = input as *const [u8];
             core.input_ports = input_ports as *const [InputPort];
-            core.audio_callback = Some(std::ptr::addr_of_mut!(audio_callback) as *mut _);
+            // SAFETY: we extend the lifetime of audio_callback to 'static, but it will only be
+            // used during the execution of this function. The explicit transmute is needed
+            // due to https://github.com/rust-lang/rust/pull/136776
+            core.audio_callback = Some(std::mem::transmute::<
+                *mut dyn FnMut(&[AudioFrame]),
+                *mut (dyn FnMut(&[AudioFrame]) + 'static),
+            >(
+                std::ptr::addr_of_mut!(audio_callback) as *mut _
+            ));
             std::mem::drop(core);
 
             run();
