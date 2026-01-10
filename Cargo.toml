@@ -11,10 +11,11 @@ edition = "2024"
 
 [dependencies]
 anyhow = { version = "1.0.72", features = ["backtrace"] }
+audio = "0.2.1"
 bytemuck = { version = "1.14.0", features = ["derive"] }
 cfg-if = "1.0.0"
 ciborium = "0.2.1"
-cpal = "0.16.0"
+cpal = "0.17.1"
 crossbeam = "0.8.2"
 dirs = "6.0.0"
 flate2 = { version = "1.0.28", default-features = false, features = ["zlib-ng"] }
@@ -23,11 +24,11 @@ imgui = { version = "0.12.0", features = ["docking", "tables-api"] }
 imgui-winit-support = "0.13.0"
 itertools = "0.14.0"
 
-libloading = "0.8.0"
+libloading = "0.9.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
-reqwest = "0.12.5"
-rfd = "0.15.4"
-rubato = "0.16.2"
+reqwest = "0.13.1"
+rfd = "0.17.1"
+rubato = "1.0.0"
 rust-ini = "0.21.0"
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
@@ -41,7 +42,7 @@ vulkano-shaders = "0.35.0"
 vulkano-util = "0.35.0"
 winit = { version = "0.30", features = ["rwh_05", "serde"] }
 zerocopy = { version = "0.8.20" }
-zip = { version = "6.0.0", features = ["deflate", "zstd", "bzip2"], default-features = false }
+zip = { version = "7.0.0", features = ["deflate", "zstd", "bzip2"], default-features = false }
 
 [profile.dev]
 opt-level = 1

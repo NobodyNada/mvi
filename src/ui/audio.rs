@@ -1,8 +1,8 @@
 use std::{
     mem::{ManuallyDrop, MaybeUninit},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -21,15 +21,15 @@ pub struct AudioWriter {
     buffer: Arc<RingBuffer<f32>>,
 
     /// Resamples audio from the libretro guest's sample rate to the host sample rate.
-    resampler: rubato::SincFixedOut<f32>,
+    resampler: rubato::Async<f32>,
 
     /// A buffer of samples waiting to be resampled.
     /// The resampler accepts audio in chunks; once we have enough samples in the buffer, we can
     /// send them to the resampler.
-    resampler_input_buffer: [Vec<f32>; 2],
+    resampler_input_buffer: Vec<[f32; 2]>,
 
     /// A scratch buffer for the resampler to store its output.
-    resampler_output_buffer: [Vec<f32>; 2],
+    resampler_output_buffer: Vec<[f32; 2]>,
 
     /// The number of output channels on the host device.
     output_channels: usize,
@@ -48,7 +48,7 @@ impl AudioWriter {
             .context("No output device available")?;
 
         let config = device.default_output_config()?;
-        let output_sample_rate = config.sample_rate().0 as usize;
+        let output_sample_rate = config.sample_rate() as usize;
         let output_channels = config.channels() as usize;
 
         // 3 frames at 60fps seems like a reasonable buffer size
@@ -78,12 +78,12 @@ impl AudioWriter {
         )?;
 
         // Create a resampler to convert from the guest sample rate to the host sample rate.
-        let resampler = rubato::SincFixedOut::new(
+        let resampler = rubato::Async::new_sinc(
             output_sample_rate as f64 / input_sample_rate as f64,
             1.,
             // Use recommended paramters from rubato documentation:
             // https://docs.rs/rubato/latest/rubato/struct.SincInterpolationParameters.html
-            rubato::SincInterpolationParameters {
+            &rubato::SincInterpolationParameters {
                 sinc_len: 256,
                 f_cutoff: 0.95,
                 oversampling_factor: 128,
@@ -92,13 +92,14 @@ impl AudioWriter {
             },
             device_bufsize / 2,
             2,
+            rubato::FixedAsync::Output,
         )?;
 
         Ok(AudioWriter {
             buffer,
             resampler,
-            resampler_input_buffer: [Vec::new(), Vec::new()],
-            resampler_output_buffer: [Vec::new(), Vec::new()],
+            resampler_input_buffer: Vec::new(),
+            resampler_output_buffer: Vec::new(),
             output_channels,
             _stream: stream,
         })
@@ -119,37 +120,38 @@ impl AudioWriter {
             // As long as we have more samples to process and we have more space in our buffer...
             while !samples.is_empty() && write_buf.peek().is_some() {
                 // Put samples into the resampler input buffer.
-                while self.resampler_input_buffer[0].len() < self.resampler.input_frames_next()
+                while self.resampler_input_buffer.len() < self.resampler.input_frames_next()
                     && !samples.is_empty()
                 {
-                    self.resampler_input_buffer[0]
-                        .push((samples[0].l as f32) / (i16::MAX as f32 + 1.));
-                    self.resampler_input_buffer[1]
-                        .push((samples[0].r as f32) / (i16::MAX as f32 + 1.));
+                    self.resampler_input_buffer.push([
+                        (samples[0].l as f32) / (i16::MAX as f32 + 1.),
+                        (samples[0].r as f32) / (i16::MAX as f32 + 1.),
+                    ]);
                     samples = &samples[1..];
                 }
 
                 // If it's full, resample a batch of samples.
-                if self.resampler_input_buffer[0].len() == self.resampler.input_frames_next() {
+                if self.resampler_input_buffer.len() == self.resampler.input_frames_next() {
                     let output_len = self.resampler.output_frames_next();
-                    self.resampler_output_buffer[0].resize(output_len, 0.);
-                    self.resampler_output_buffer[1].resize(output_len, 0.);
+                    self.resampler_output_buffer.resize(output_len, [0., 0.]);
                     self.resampler
                         .process_into_buffer(
-                            &self.resampler_input_buffer,
-                            &mut self.resampler_output_buffer,
+                            &audio::wrap::interleaved(
+                                self.resampler_input_buffer.as_flattened(),
+                                2,
+                            ),
+                            &mut audio::wrap::interleaved(
+                                self.resampler_output_buffer.as_flattened_mut(),
+                                2,
+                            ),
                             None,
                         )
                         .unwrap();
-                    self.resampler_input_buffer[0].clear();
-                    self.resampler_input_buffer[1].clear();
+                    self.resampler_input_buffer.clear();
                 }
 
                 // Write samples from the resampler buffer to the playback buffer.
-                let interleaved_samples = self.resampler_output_buffer[0]
-                    .iter()
-                    .zip(self.resampler_output_buffer[1].iter());
-                for ((l, r), out) in interleaved_samples.zip(&mut write_buf) {
+                for ([l, r], out) in self.resampler_output_buffer.iter().zip(&mut write_buf) {
                     if self.output_channels == 1 {
                         // If the output is mono, downmix the samples.
                         out[0] = MaybeUninit::new((l + r) / 2.);
@@ -161,8 +163,7 @@ impl AudioWriter {
                     }
                     samples_written += self.output_channels;
                 }
-                self.resampler_output_buffer[0].clear();
-                self.resampler_output_buffer[1].clear();
+                self.resampler_output_buffer.clear();
             }
 
             self.buffer.commit_write(samples_written);
