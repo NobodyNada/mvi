@@ -6,12 +6,12 @@ use std::{
     ops::{Deref, DerefMut},
     ptr::null_mut,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use libloading::Library;
 use libretro_ffi::*;
 
@@ -311,13 +311,15 @@ impl PixelFormat {
         }
     }
 
-    unsafe fn read(&self, buf: *const c_void) -> [u8; 4] { unsafe {
-        let pixel: u32 = match self {
-            PixelFormat::XRGB8888 => buf.cast::<u32>().read(),
-            PixelFormat::XRGB1555 | PixelFormat::RGB565 => buf.cast::<u16>().read() as u32,
-        };
-        self.convert(pixel)
-    }}
+    unsafe fn read(&self, buf: *const c_void) -> [u8; 4] {
+        unsafe {
+            let pixel: u32 = match self {
+                PixelFormat::XRGB8888 => buf.cast::<u32>().read(),
+                PixelFormat::XRGB1555 | PixelFormat::RGB565 => buf.cast::<u16>().read() as u32,
+            };
+            self.convert(pixel)
+        }
+    }
 
     #[allow(clippy::identity_op)]
     #[rustfmt::skip]
@@ -368,48 +370,50 @@ impl TryFrom<retro_pixel_format> for PixelFormat {
 }
 
 impl CoreImpl {
-    unsafe fn load(path: &std::path::Path) -> Result<()> { unsafe {
-        let mut lock = CORE.lock().unwrap();
-        assert!(lock.is_none(), "Only one core can be loaded at once");
+    unsafe fn load(path: &std::path::Path) -> Result<()> {
+        unsafe {
+            let mut lock = CORE.lock().unwrap();
+            assert!(lock.is_none(), "Only one core can be loaded at once");
 
-        let library = libloading::Library::new(path)?;
-        let symbols = CoreSymbols::new(&library)?;
-        *SYMBOLS.write().unwrap() = Some(symbols);
-        let result = CoreImpl {
-            library,
-            pixel_format: PixelFormat::XRGB1555,
-            frame: Frame {
-                width: 0,
-                height: 0,
-                buffer: Vec::new(),
-            },
-            memory_map: vec![],
-            input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
-            input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
-            audio_callback: None,
-            trace_context: null_mut(),
-            trace_buffer: vec![],
-        };
-        ensure!(
-            result.retro_api_version() == RETRO_API_VERSION,
-            "core declares incompatible libretro version"
-        );
+            let library = libloading::Library::new(path)?;
+            let symbols = CoreSymbols::new(&library)?;
+            *SYMBOLS.write().unwrap() = Some(symbols);
+            let result = CoreImpl {
+                library,
+                pixel_format: PixelFormat::XRGB1555,
+                frame: Frame {
+                    width: 0,
+                    height: 0,
+                    buffer: Vec::new(),
+                },
+                memory_map: vec![],
+                input: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
+                input_ports: std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
+                audio_callback: None,
+                trace_context: null_mut(),
+                trace_buffer: vec![],
+            };
+            ensure!(
+                result.retro_api_version() == RETRO_API_VERSION,
+                "core declares incompatible libretro version"
+            );
 
-        *lock = Some(result);
-        std::mem::drop(lock);
+            *lock = Some(result);
+            std::mem::drop(lock);
 
-        let symbols = SYMBOLS.read().unwrap();
-        let symbols = symbols.as_ref().unwrap();
-        (symbols.retro_set_environment)(Some(environment_callback));
-        (symbols.retro_set_video_refresh)(Some(video_refresh_callback));
-        (symbols.retro_set_audio_sample)(Some(audio_sample_callback));
-        (symbols.retro_set_audio_sample_batch)(Some(audio_samples_callback));
-        (symbols.retro_set_input_poll)(Some(input_poll_callback));
-        (symbols.retro_set_input_state)(Some(input_state_callback));
+            let symbols = SYMBOLS.read().unwrap();
+            let symbols = symbols.as_ref().unwrap();
+            (symbols.retro_set_environment)(Some(environment_callback));
+            (symbols.retro_set_video_refresh)(Some(video_refresh_callback));
+            (symbols.retro_set_audio_sample)(Some(audio_sample_callback));
+            (symbols.retro_set_audio_sample_batch)(Some(audio_samples_callback));
+            (symbols.retro_set_input_poll)(Some(input_poll_callback));
+            (symbols.retro_set_input_state)(Some(input_state_callback));
 
-        (symbols.retro_init)();
-        Ok(())
-    }}
+            (symbols.retro_init)();
+            Ok(())
+        }
+    }
 
     pub fn retro_api_version(&self) -> u32 {
         unsafe { (symbols().retro_api_version)() }
@@ -508,15 +512,17 @@ impl CoreImpl {
     }
 }
 
-unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool { unsafe {
-    let mut core = lock();
-    match cmd {
-        RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
-        RETRO_ENVIRONMENT_SET_MEMORY_MAPS => core.set_memory_maps(*data.cast()),
-        RETRO_ENVIRONMENT_SET_TRACE_CONTEXT => core.set_trace_context(data.cast()),
-        _ => false,
+unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
+    unsafe {
+        let mut core = lock();
+        match cmd {
+            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
+            RETRO_ENVIRONMENT_SET_MEMORY_MAPS => core.set_memory_maps(*data.cast()),
+            RETRO_ENVIRONMENT_SET_TRACE_CONTEXT => core.set_trace_context(data.cast()),
+            _ => false,
+        }
     }
-}}
+}
 
 unsafe extern "C" fn video_refresh_callback(
     data: *const c_void,
@@ -531,31 +537,35 @@ unsafe extern "C" fn audio_sample_callback(l: i16, r: i16) {
     lock().audio_callback(&[AudioFrame { l, r }]);
 }
 
-unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> usize { unsafe {
-    lock().audio_callback(std::slice::from_raw_parts(data.cast(), frames));
-    frames
-}}
+unsafe extern "C" fn audio_samples_callback(data: *const i16, frames: usize) -> usize {
+    unsafe {
+        lock().audio_callback(std::slice::from_raw_parts(data.cast(), frames));
+        frames
+    }
+}
 
 unsafe extern "C" fn input_poll_callback() {}
 
-unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 { unsafe {
-    let core = lock();
-    assert!(!core.input.is_null());
-    assert!(!core.input_ports.is_null());
+unsafe extern "C" fn input_state_callback(port: u32, _device: u32, index: u32, id: u32) -> i16 {
+    unsafe {
+        let core = lock();
+        assert!(!core.input.is_null());
+        assert!(!core.input_ports.is_null());
 
-    let input = &*core.input;
-    let input_ports = &*core.input_ports;
-    let port = port as usize;
+        let input = &*core.input;
+        let input_ports = &*core.input_ports;
+        let port = port as usize;
 
-    if port < input_ports.len() {
-        let offset: usize = input_ports[0..port]
-            .iter()
-            .map(crate::tas::input::InputPort::frame_size)
-            .sum();
-        let len = input_ports[port].frame_size();
+        if port < input_ports.len() {
+            let offset: usize = input_ports[0..port]
+                .iter()
+                .map(crate::tas::input::InputPort::frame_size)
+                .sum();
+            let len = input_ports[port].frame_size();
 
-        input_ports[port].read(&input[offset..(offset + len)], index, id)
-    } else {
-        0
+            input_ports[port].read(&input[offset..(offset + len)], index, id)
+        } else {
+            0
+        }
     }
-}}
+}

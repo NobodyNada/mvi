@@ -1,6 +1,6 @@
 use imgui::Ui;
 
-use crate::tas::{movie, Tas};
+use crate::tas::{Tas, movie};
 
 pub struct RamWatch {
     pub opened: bool,
@@ -84,65 +84,69 @@ impl RamWatch {
                 .modal_popup_config(ADD_POPUP)
                 .resizable(false)
                 .begin_popup()
-            { Some(_token) => {
-                // Focus on the name field when the editor is first opened.
-                if self.editor.should_focus {
-                    self.editor.should_focus = false;
-                    ui.set_keyboard_focus_here();
-                }
-                ui.input_text("Name", &mut self.editor.name).build();
+            {
+                Some(_token) => {
+                    // Focus on the name field when the editor is first opened.
+                    if self.editor.should_focus {
+                        self.editor.should_focus = false;
+                        ui.set_keyboard_focus_here();
+                    }
+                    ui.input_text("Name", &mut self.editor.name).build();
 
-                ui.input_text("Address", &mut self.editor.address).build();
+                    ui.input_text("Address", &mut self.editor.address).build();
 
-                let group = ui.begin_group();
-                ui.columns(2, "ram_watch_editor", false);
+                    let group = ui.begin_group();
+                    ui.columns(2, "ram_watch_editor", false);
 
-                ui.text("Size");
-                ui.radio_button("8 bits", &mut self.editor.format.width, 1);
-                ui.radio_button("16 bits", &mut self.editor.format.width, 2);
-                ui.radio_button("32 bits", &mut self.editor.format.width, 3);
-                ui.radio_button("64 bits", &mut self.editor.format.width, 4);
+                    ui.text("Size");
+                    ui.radio_button("8 bits", &mut self.editor.format.width, 1);
+                    ui.radio_button("16 bits", &mut self.editor.format.width, 2);
+                    ui.radio_button("32 bits", &mut self.editor.format.width, 3);
+                    ui.radio_button("64 bits", &mut self.editor.format.width, 4);
 
-                ui.next_column();
+                    ui.next_column();
 
-                ui.text("Format");
-                ui.radio_button("Hex", &mut self.editor.format.hex, true);
-                ui.radio_button("Decimal", &mut self.editor.format.hex, false);
+                    ui.text("Format");
+                    ui.radio_button("Hex", &mut self.editor.format.hex, true);
+                    ui.radio_button("Decimal", &mut self.editor.format.hex, false);
 
-                ui.checkbox("Signed", &mut self.editor.format.signed);
-                group.end();
+                    ui.checkbox("Signed", &mut self.editor.format.signed);
+                    group.end();
 
-                ui.columns(1, "ram_watch_confirm", false);
-                let button_width = ui.calc_text_size("  Cancel  OK  ")[0];
-                ui.set_cursor_pos([
-                    ui.window_size()[0] - button_width,
-                    ui.window_size()[1] - ui.text_line_height_with_spacing() * 2.,
-                ]);
+                    ui.columns(1, "ram_watch_confirm", false);
+                    let button_width = ui.calc_text_size("  Cancel  OK  ")[0];
+                    ui.set_cursor_pos([
+                        ui.window_size()[0] - button_width,
+                        ui.window_size()[1] - ui.text_line_height_with_spacing() * 2.,
+                    ]);
 
-                if ui.button("Cancel") || ui.is_key_pressed(imgui::Key::Escape) {
-                    ui.close_current_popup();
-                    self.editor.state = EditorState::Closed;
-                }
-                ui.same_line();
-
-                let watch = self.editor.to_ram_watch();
-                ui.enabled(watch.is_some(), || {
-                    if ui.button("OK") || (watch.is_some() && ui.is_key_pressed(imgui::Key::Enter))
-                    {
+                    if ui.button("Cancel") || ui.is_key_pressed(imgui::Key::Escape) {
                         ui.close_current_popup();
-                        let watch = watch.unwrap();
-                        match self.editor.state {
-                            EditorState::Closed => unreachable!(),
-                            EditorState::Add => tas.ramwatches_mut().push(watch),
-                            EditorState::Edit(i) => tas.ramwatches_mut()[i] = watch,
-                        }
                         self.editor.state = EditorState::Closed;
                     }
-                });
-            } _ => {
-                ui.open_popup(ADD_POPUP);
-                self.editor.should_focus = true;
-            }}
+                    ui.same_line();
+
+                    let watch = self.editor.to_ram_watch();
+                    ui.enabled(watch.is_some(), || {
+                        if ui.button("OK")
+                            || (watch.is_some() && ui.is_key_pressed(imgui::Key::Enter))
+                        {
+                            ui.close_current_popup();
+                            let watch = watch.unwrap();
+                            match self.editor.state {
+                                EditorState::Closed => unreachable!(),
+                                EditorState::Add => tas.ramwatches_mut().push(watch),
+                                EditorState::Edit(i) => tas.ramwatches_mut()[i] = watch,
+                            }
+                            self.editor.state = EditorState::Closed;
+                        }
+                    });
+                }
+                _ => {
+                    ui.open_popup(ADD_POPUP);
+                    self.editor.should_focus = true;
+                }
+            }
         } else {
             ignore_events = false;
         }
@@ -285,18 +289,18 @@ impl RamWatch {
                 .add_filter("JSON file", &["json"])
                 .set_title("Select a memory watch file")
                 .pick_file()
-            {
-                *tas.ramwatches_mut() = serde_json::from_reader(std::fs::File::open(path)?)?;
-            }
+        {
+            *tas.ramwatches_mut() = serde_json::from_reader(std::fs::File::open(path)?)?;
+        }
         if ui.menu_item("Export watches...")
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON file", &["json"])
                 .set_title("Select a memory watch file")
                 .set_file_name("ram_watch")
                 .save_file()
-            {
-                serde_json::to_writer_pretty(std::fs::File::create(path)?, tas.ramwatches_mut())?;
-            }
+        {
+            serde_json::to_writer_pretty(std::fs::File::create(path)?, tas.ramwatches_mut())?;
+        }
 
         Ok(())
     }

@@ -70,73 +70,78 @@ impl KeybindEditor {
         if let Some(target) = &self.recording {
             const ID: &str = "Record Keybind";
             ui::Ui::set_popup_size(ui, [300., 100.]);
-            match ui.begin_modal_popup(ID) { Some(_token) => {
-                match target {
-                    // What's the name of the thing we're recording?
-                    RecordTarget::Global(s) | RecordTarget::Normal(s) | RecordTarget::Insert(s) => {
-                        ui.text(format!("Enter keybind for '{s}'"));
-                    }
-                    RecordTarget::Controller {
-                        port: _,
-                        device,
-                        index,
-                    } => {
-                        let tas::input::InputPort::Joypad(joypad) = device;
-                        ui.text(format!(
-                            "Enter keybind for '{device} {}'",
-                            joypad.buttons()[*index]
-                        ))
-                    }
-                };
-                Self::draw_binding(ui, &self.recorded_keys);
-
-                if ui.button("Save") {
-                    // Write the keybind to the target.
-                    let mut apply = |target: &mut Vec<_>| {
-                        if self.append {
-                            target.push(std::mem::take(&mut self.recorded_keys));
-                        } else {
-                            *target = vec![std::mem::take(&mut self.recorded_keys)];
-                        }
-                    };
-                    match self.recording.take().unwrap() {
-                        RecordTarget::Global(target) => {
-                            apply(self.config.global_bindings.entry(target).or_default())
-                        }
-                        RecordTarget::Normal(target) => {
-                            apply(self.config.normal_bindings.entry(target).or_default())
-                        }
-                        RecordTarget::Insert(target) => {
-                            apply(self.config.insert_bindings.entry(target).or_default())
+            match ui.begin_modal_popup(ID) {
+                Some(_token) => {
+                    match target {
+                        // What's the name of the thing we're recording?
+                        RecordTarget::Global(s)
+                        | RecordTarget::Normal(s)
+                        | RecordTarget::Insert(s) => {
+                            ui.text(format!("Enter keybind for '{s}'"));
                         }
                         RecordTarget::Controller {
-                            port,
+                            port: _,
                             device,
                             index,
                         } => {
-                            let mut keys = std::mem::take(&mut self.recorded_keys);
-                            assert!(keys.len() <= 1);
-                            let key = keys.drain(..).next().map(|(k, _)| k);
-                            self.config.controller_bindings[port]
-                                .get_mut(&device)
-                                .unwrap()[index] = key
+                            let tas::input::InputPort::Joypad(joypad) = device;
+                            ui.text(format!(
+                                "Enter keybind for '{device} {}'",
+                                joypad.buttons()[*index]
+                            ))
                         }
+                    };
+                    Self::draw_binding(ui, &self.recorded_keys);
+
+                    if ui.button("Save") {
+                        // Write the keybind to the target.
+                        let mut apply = |target: &mut Vec<_>| {
+                            if self.append {
+                                target.push(std::mem::take(&mut self.recorded_keys));
+                            } else {
+                                *target = vec![std::mem::take(&mut self.recorded_keys)];
+                            }
+                        };
+                        match self.recording.take().unwrap() {
+                            RecordTarget::Global(target) => {
+                                apply(self.config.global_bindings.entry(target).or_default())
+                            }
+                            RecordTarget::Normal(target) => {
+                                apply(self.config.normal_bindings.entry(target).or_default())
+                            }
+                            RecordTarget::Insert(target) => {
+                                apply(self.config.insert_bindings.entry(target).or_default())
+                            }
+                            RecordTarget::Controller {
+                                port,
+                                device,
+                                index,
+                            } => {
+                                let mut keys = std::mem::take(&mut self.recorded_keys);
+                                assert!(keys.len() <= 1);
+                                let key = keys.drain(..).next().map(|(k, _)| k);
+                                self.config.controller_bindings[port]
+                                    .get_mut(&device)
+                                    .unwrap()[index] = key
+                            }
+                        }
+                        ui.close_current_popup();
                     }
-                    ui.close_current_popup();
+                    ui.same_line();
+                    if ui.button("Clear") {
+                        self.recorded_keys = Vec::new();
+                    }
+                    ui.same_line();
+                    if ui.button("Cancel") {
+                        self.recorded_keys = Vec::new();
+                        self.recording = None;
+                        ui.close_current_popup();
+                    }
                 }
-                ui.same_line();
-                if ui.button("Clear") {
-                    self.recorded_keys = Vec::new();
+                _ => {
+                    ui.open_popup(ID);
                 }
-                ui.same_line();
-                if ui.button("Cancel") {
-                    self.recorded_keys = Vec::new();
-                    self.recording = None;
-                    ui.close_current_popup();
-                }
-            } _ => {
-                ui.open_popup(ID);
-            }}
+            }
         }
 
         if let Some(_token) = ui
@@ -151,45 +156,45 @@ impl KeybindEditor {
                         let tas::input::InputPort::Joypad(joypad) = device;
                         let device_name = format!("{device}");
                         if ui.collapsing_header(&device_name, imgui::TreeNodeFlags::BULLET)
-                            && let Some(_token) = ui.begin_table(device_name, 2) {
-                                ui.table_setup_column("Button");
-                                ui.table_setup_column("Key Binding");
-                                ui.table_headers_row();
+                            && let Some(_token) = ui.begin_table(device_name, 2)
+                        {
+                            ui.table_setup_column("Button");
+                            ui.table_setup_column("Key Binding");
+                            ui.table_headers_row();
 
-                                for (i, key) in buttons.iter_mut().enumerate() {
-                                    ui.table_next_column();
+                            for (i, key) in buttons.iter_mut().enumerate() {
+                                ui.table_next_column();
 
-                                    let selected = ui
-                                        .selectable_config(format!("{}##{i}", joypad.buttons()[i]))
-                                        .span_all_columns(true)
-                                        .allow_double_click(true)
-                                        .build();
-                                    if selected
-                                        && ui.is_mouse_double_clicked(imgui::MouseButton::Left)
-                                    {
-                                        if modifiers.control_key() {
-                                            *key = None;
-                                        } else if modifiers.alt_key() {
-                                            *key = self.default.controller_bindings[port_index]
-                                                [device][i]
-                                                .clone();
-                                        } else {
-                                            self.recording = Some(RecordTarget::Controller {
-                                                port: port_index,
-                                                device: *device,
-                                                index: i,
-                                            });
-                                        }
-                                    }
-                                    ui.table_next_column();
-                                    if let Some(key) = key {
-                                        Self::draw_binding(
-                                            ui,
-                                            &[(key.clone(), ModifiersState::empty())],
-                                        );
+                                let selected = ui
+                                    .selectable_config(format!("{}##{i}", joypad.buttons()[i]))
+                                    .span_all_columns(true)
+                                    .allow_double_click(true)
+                                    .build();
+                                if selected && ui.is_mouse_double_clicked(imgui::MouseButton::Left)
+                                {
+                                    if modifiers.control_key() {
+                                        *key = None;
+                                    } else if modifiers.alt_key() {
+                                        *key = self.default.controller_bindings[port_index][device]
+                                            [i]
+                                            .clone();
+                                    } else {
+                                        self.recording = Some(RecordTarget::Controller {
+                                            port: port_index,
+                                            device: *device,
+                                            index: i,
+                                        });
                                     }
                                 }
+                                ui.table_next_column();
+                                if let Some(key) = key {
+                                    Self::draw_binding(
+                                        ui,
+                                        &[(key.clone(), ModifiersState::empty())],
+                                    );
+                                }
                             }
+                        }
                     }
                 }
             }
@@ -216,36 +221,37 @@ impl KeybindEditor {
                 ),
             ] {
                 if ui.collapsing_header(label, imgui::TreeNodeFlags::FRAMED)
-                    && let Some(_token) = ui.begin_table(label, 2) {
-                        ui.table_setup_column("Action");
-                        ui.table_setup_column("Key Binding");
-                        ui.table_headers_row();
+                    && let Some(_token) = ui.begin_table(label, 2)
+                {
+                    ui.table_setup_column("Action");
+                    ui.table_setup_column("Key Binding");
+                    ui.table_headers_row();
 
-                        for (action, bindings) in bindings.iter_mut() {
-                            ui.table_next_column();
-                            let selected = ui
-                                .selectable_config(action)
-                                .span_all_columns(true)
-                                .allow_double_click(true)
-                                .build();
-                            if selected && ui.is_mouse_double_clicked(imgui::MouseButton::Left) {
-                                if modifiers.control_key() {
-                                    *bindings = Vec::new();
-                                } else if modifiers.alt_key() {
-                                    // Restore default binding
-                                    *bindings = default.get(action).unwrap_or(&Vec::new()).clone();
-                                } else {
-                                    self.append = modifiers.shift_key();
-                                    self.recording = Some(record_target(action.clone()));
-                                }
+                    for (action, bindings) in bindings.iter_mut() {
+                        ui.table_next_column();
+                        let selected = ui
+                            .selectable_config(action)
+                            .span_all_columns(true)
+                            .allow_double_click(true)
+                            .build();
+                        if selected && ui.is_mouse_double_clicked(imgui::MouseButton::Left) {
+                            if modifiers.control_key() {
+                                *bindings = Vec::new();
+                            } else if modifiers.alt_key() {
+                                // Restore default binding
+                                *bindings = default.get(action).unwrap_or(&Vec::new()).clone();
+                            } else {
+                                self.append = modifiers.shift_key();
+                                self.recording = Some(record_target(action.clone()));
                             }
-
-                            ui.table_next_column();
-                            Self::draw_bindings(ui, bindings);
-
-                            ui.table_next_row();
                         }
+
+                        ui.table_next_column();
+                        Self::draw_bindings(ui, bindings);
+
+                        ui.table_next_row();
                     }
+                }
             }
         }
 

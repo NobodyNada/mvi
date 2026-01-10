@@ -3,7 +3,7 @@ use std::{ffi::c_void, sync::Arc};
 use libretro_ffi::*;
 use zerocopy::FromBytes;
 
-use super::{lock, Core};
+use super::{Core, lock};
 
 pub struct Fields {
     pub fields: Vec<Field>,
@@ -151,11 +151,12 @@ impl<'a> Entry<'a> {
 
     pub fn get_field<'f>(&self, field: &'f Field) -> FieldValue<'f> {
         // FIXME: seen crash here when loading another movie while trace logger is open
-        assert!(self
-            .fields
-            .fields
-            .as_ptr_range()
-            .contains(&&raw const *field));
+        assert!(
+            self.fields
+                .fields
+                .as_ptr_range()
+                .contains(&&raw const *field)
+        );
 
         let bytes_in_place = &self.data[field.offset..][..field.size];
 

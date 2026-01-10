@@ -92,12 +92,14 @@ impl CoreSymbols {
         }
     }
 
-    unsafe fn load_symbol<T>(library: &Library, symbol: &str) -> Result<RequiredSymbol<Option<T>>> { unsafe {
-        library
-            .get(symbol.as_bytes())
-            .map(|s: libloading::Symbol<Option<T>>| s.into_raw())
-            .map_err(|e| anyhow!("error loading symbol '{symbol}': {e:?}"))
-            .map(|s| Some(RequiredSymbol(s.lift_option()?)))
-            .and_then(|s| s.ok_or_else(|| anyhow!("Core does not declare symbol '{symbol}")))
-    }}
+    unsafe fn load_symbol<T>(library: &Library, symbol: &str) -> Result<RequiredSymbol<Option<T>>> {
+        unsafe {
+            library
+                .get(symbol.as_bytes())
+                .map(|s: libloading::Symbol<Option<T>>| s.into_raw())
+                .map_err(|e| anyhow!("error loading symbol '{symbol}': {e:?}"))
+                .map(|s| Some(RequiredSymbol(s.lift_option()?)))
+                .and_then(|s| s.ok_or_else(|| anyhow!("Core does not declare symbol '{symbol}")))
+        }
+    }
 }

@@ -108,9 +108,10 @@ impl CoreDb {
         let ext = format!(".{CORE_EXT}");
         for file in std::fs::read_dir(Self::cores_dir())? {
             if let Some(name) = file?.file_name().to_str()
-                && let Some(id) = name.strip_suffix(&ext) {
-                    cores.insert(id.to_string());
-                }
+                && let Some(id) = name.strip_suffix(&ext)
+            {
+                cores.insert(id.to_string());
+            }
         }
         Ok(cores)
     }

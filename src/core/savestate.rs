@@ -5,8 +5,8 @@ use std::{
 };
 
 use flate2::{
-    bufread::{ZlibDecoder, ZlibEncoder},
     Compression,
+    bufread::{ZlibDecoder, ZlibEncoder},
 };
 
 /// A reference to an uncompressed savestate living somewhere in memory.

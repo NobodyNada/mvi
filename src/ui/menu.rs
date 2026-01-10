@@ -35,9 +35,9 @@ impl Ui {
                         .add_filter("mvi movie file", &["mvi"])
                         .set_title("Select a movie file")
                         .pick_file()
-                    {
-                        self.open_movie(path)
-                    }
+                {
+                    self.open_movie(path)
+                }
                 if !self.movie_cache.recents().is_empty() {
                     ui.separator();
                     ui.text_disabled("Recent Movies");
@@ -209,15 +209,17 @@ impl Ui {
         const ID: &str = "Select Core";
         Ui::set_popup_position(ui);
         Ui::set_popup_size(ui, ui.window_size());
-        match ui.begin_modal_popup(ID) { Some(_token) => {
-            if let Some(_token) = ui
-                .child_window("core_list")
-                .size([0., -ui.text_line_height_with_spacing() * 4.])
-                .begin()
-                && let Some(_token) = ui.begin_table(
-                    "Available cores",
-                    2 + core_selector.show_non_matching as usize,
-                ) {
+        match ui.begin_modal_popup(ID) {
+            Some(_token) => {
+                if let Some(_token) = ui
+                    .child_window("core_list")
+                    .size([0., -ui.text_line_height_with_spacing() * 4.])
+                    .begin()
+                    && let Some(_token) = ui.begin_table(
+                        "Available cores",
+                        2 + core_selector.show_non_matching as usize,
+                    )
+                {
                     ui.table_setup_column("Core Name");
                     ui.table_setup_column_with(imgui::TableColumnSetup {
                         name: "Downloaded",
@@ -281,32 +283,36 @@ impl Ui {
                     }
                 }
 
-            ui.new_line();
+                ui.new_line();
 
-            if let Some(extension) = &core_selector.extension {
-                ui.checkbox(
-                    format!("Show cores that don't support the selected ROM (\".{extension}\")"),
-                    &mut core_selector.show_non_matching,
-                );
-            }
-
-            let button_width = ui.calc_text_size("  Cancel  Select  ")[0];
-            ui.same_line_with_pos(ui.window_size()[0] - button_width);
-            if ui.button("Cancel") {
-                ui.close_current_popup();
-                self.core_selector = None;
-                return true;
-            }
-            ui.same_line();
-            ui.enabled(core_selector.selected_core_id.is_some(), || {
-                if ui.button("Select") {
-                    let core_selector = self.core_selector.take().unwrap();
-                    (core_selector.callback)(self, &core_selector.selected_core_id.unwrap());
+                if let Some(extension) = &core_selector.extension {
+                    ui.checkbox(
+                        format!(
+                            "Show cores that don't support the selected ROM (\".{extension}\")"
+                        ),
+                        &mut core_selector.show_non_matching,
+                    );
                 }
-            });
-        } _ => {
-            ui.open_popup(ID);
-        }}
+
+                let button_width = ui.calc_text_size("  Cancel  Select  ")[0];
+                ui.same_line_with_pos(ui.window_size()[0] - button_width);
+                if ui.button("Cancel") {
+                    ui.close_current_popup();
+                    self.core_selector = None;
+                    return true;
+                }
+                ui.same_line();
+                ui.enabled(core_selector.selected_core_id.is_some(), || {
+                    if ui.button("Select") {
+                        let core_selector = self.core_selector.take().unwrap();
+                        (core_selector.callback)(self, &core_selector.selected_core_id.unwrap());
+                    }
+                });
+            }
+            _ => {
+                ui.open_popup(ID);
+            }
+        }
 
         true
     }
@@ -404,9 +410,10 @@ impl Ui {
 
             // Also include the extension of the ROM filename associated with the movie
             if let Some((_, e)) = file.rom_filename.rsplit_once(".")
-                && !extensions.iter().any(|ext| ext == e) {
-                    extensions.push(e.to_string());
-                }
+                && !extensions.iter().any(|ext| ext == e)
+            {
+                extensions.push(e.to_string());
+            }
             extensions.sort();
 
             rfd::FileDialog::new()
@@ -452,43 +459,46 @@ impl Ui {
     pub(super) fn draw_hash_mismatch(&mut self, ui: &imgui::Ui) -> bool {
         if let Some(mismatch) = self.hash_mismatch.as_mut() {
             const ID: &str = "Hash mismatch";
-            match ui.begin_modal_popup(ID) { Some(_token) => {
-                ui.text(format!(
+            match ui.begin_modal_popup(ID) {
+                Some(_token) => {
+                    ui.text(format!(
                     "The selected ROM '{}' is not the same ROM that the movie was created with.",
                     mismatch.rom_path.to_string_lossy()
                 ));
 
-                ui.text("ROM hash: ");
-                ui.same_line();
-                ui.text(&mismatch.actual_hash);
+                    ui.text("ROM hash: ");
+                    ui.same_line();
+                    ui.text(&mismatch.actual_hash);
 
-                ui.text("Expected hash: ");
-                ui.same_line();
-                ui.text(&mismatch.expected_hash);
+                    ui.text("Expected hash: ");
+                    ui.same_line();
+                    ui.text(&mismatch.expected_hash);
 
-                if ui.button("Select another ROM") {
-                    ui.close_current_popup();
-                    let mismatch = self.hash_mismatch.take().unwrap();
-                    self.handle_error(|ui| {
-                        ui.open_movie_file(mismatch.movie_file, mismatch.movie_path, false)
-                    })
+                    if ui.button("Select another ROM") {
+                        ui.close_current_popup();
+                        let mismatch = self.hash_mismatch.take().unwrap();
+                        self.handle_error(|ui| {
+                            ui.open_movie_file(mismatch.movie_file, mismatch.movie_path, false)
+                        })
+                    }
+                    if ui.button("Load ROM anyway") {
+                        ui.close_current_popup();
+                        let mismatch = self.hash_mismatch.take().unwrap();
+                        self.open_movie_with_rom(
+                            mismatch.movie_file,
+                            mismatch.movie_path,
+                            mismatch.rom_path,
+                        )
+                    }
+                    if ui.button("Cancel") {
+                        ui.close_current_popup();
+                        self.hash_mismatch = None;
+                    }
                 }
-                if ui.button("Load ROM anyway") {
-                    ui.close_current_popup();
-                    let mismatch = self.hash_mismatch.take().unwrap();
-                    self.open_movie_with_rom(
-                        mismatch.movie_file,
-                        mismatch.movie_path,
-                        mismatch.rom_path,
-                    )
+                _ => {
+                    ui.open_popup(ID);
                 }
-                if ui.button("Cancel") {
-                    ui.close_current_popup();
-                    self.hash_mismatch = None;
-                }
-            } _ => {
-                ui.open_popup(ID);
-            }}
+            }
             return true;
         }
         false
