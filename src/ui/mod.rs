@@ -2,9 +2,8 @@ use std::sync::{Arc, mpsc};
 
 use anyhow::{Error, Result, anyhow, bail};
 use crossbeam::atomic::AtomicCell;
-use vk::{command_buffer::PrimaryCommandBufferAbstract, sync::GpuFuture};
-use vulkano as vk;
 use winit::{keyboard::NamedKey, platform::modifier_supplement::KeyEventExtModifierSupplement};
+use zerocopy::IntoBytes;
 
 use crate::{
     core::{self, Frame},
@@ -453,7 +452,6 @@ impl Ui {
 
     fn run_frame(&mut self, renderer: &mut Renderer) -> Option<(&Frame, &mut Framebuffer)> {
         let tas = self.tas.as_mut()?;
-        let av = tas.av_info();
         tas.set_trace_enabled(self.trace_debuger.is_some());
         let frame = tas.run_host_frame(|samples| {
             if let Some(writer) = self.audio.as_mut() {
@@ -467,52 +465,28 @@ impl Ui {
             self.framebuffer = None;
         }
 
+        let size = wgpu::Extent3d {
+            width: frame.width as u32,
+            height: frame.height as u32,
+            depth_or_array_layers: 1,
+        };
         // Create the framebuffer, if it does not already exist
         let framebuffer = self.framebuffer.get_or_insert_with(|| {
-            let buffer: vk::buffer::Subbuffer<[[u8; 4]]> = vk::buffer::Buffer::new_slice(
-                renderer.context().memory_allocator().clone(),
-                vk::buffer::sys::BufferCreateInfo {
-                    usage: vk::buffer::BufferUsage::TRANSFER_SRC,
-                    ..Default::default()
-                },
-                vk::memory::allocator::AllocationCreateInfo {
-                    memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE
-                        | vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                (av.geometry.max_width * av.geometry.max_height) as u64,
-            )
-            .unwrap();
-
-            let image = vk::image::Image::new(
-                renderer.context().memory_allocator().clone(),
-                vk::image::ImageCreateInfo {
-                    format: vk::format::Format::R8G8B8A8_UNORM,
-                    view_formats: vec![vk::format::Format::R8G8B8A8_UNORM],
-                    extent: [frame.width as u32, frame.height as u32, 1],
-                    usage: vk::image::ImageUsage::TRANSFER_DST | vk::image::ImageUsage::SAMPLED,
-                    ..Default::default()
-                },
-                vk::memory::allocator::AllocationCreateInfo {
-                    memory_type_filter: vk::memory::allocator::MemoryTypeFilter::PREFER_DEVICE
-                        | vk::memory::allocator::MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-
-            let texture = renderer
-                .create_texture(
-                    vk::image::view::ImageView::new(
-                        image.clone(),
-                        vk::image::view::ImageViewCreateInfo::from_image(&image),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            let image = renderer
+                .device()
+                .create_texture(&wgpu::wgt::TextureDescriptor {
+                    label: Some("Emulator Framebuffer"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+            let texture = renderer.create_texture(&image).unwrap();
 
             Framebuffer {
-                buffer,
                 image,
                 texture,
                 width: frame.width,
@@ -521,28 +495,20 @@ impl Ui {
         });
 
         // Upload the frame to the GPU
-        framebuffer.buffer.write().unwrap()[..frame.buffer.len()].copy_from_slice(&frame.buffer);
-        let mut command_buffer = vk::command_buffer::AutoCommandBufferBuilder::primary(
-            renderer.command_buffer_allocator().clone(),
-            renderer.context().graphics_queue().queue_family_index(),
-            vk::command_buffer::CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-        command_buffer
-            .copy_buffer_to_image(vk::command_buffer::CopyBufferToImageInfo::buffer_image(
-                framebuffer.buffer.clone(),
-                framebuffer.image.clone(),
-            ))
-            .unwrap();
-        command_buffer
-            .build()
-            .unwrap()
-            .execute(renderer.context().graphics_queue().clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+        renderer.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &framebuffer.image,
+                mip_level: 0,
+                origin: Default::default(),
+                aspect: wgpu::TextureAspect::All,
+            },
+            frame.buffer.as_bytes(),
+            wgpu::TexelCopyBufferLayout {
+                bytes_per_row: Some(framebuffer.width as u32 * 4),
+                ..Default::default()
+            },
+            size,
+        );
 
         Some((frame, framebuffer))
     }
@@ -564,8 +530,7 @@ impl Ui {
 }
 
 struct Framebuffer {
-    buffer: vk::buffer::Subbuffer<[[u8; 4]]>,
-    image: Arc<vk::image::Image>,
+    image: wgpu::Texture,
     texture: Arc<backend::render::Texture>,
     width: usize,
     height: usize,

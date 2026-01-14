@@ -7,13 +7,12 @@ use std::{
 };
 
 use anyhow::Result;
+use cfg_if::cfg_if;
 use imgui::{
     BackendFlags, Context, FontConfig, FontGlyphRanges, FontSource, Id, PlatformViewportBackend,
     Ui, ViewportFlags,
 };
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use vk::swapchain::Surface;
-use vulkano as vk;
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
@@ -21,6 +20,9 @@ use winit::{
     event_loop::{EventLoop, EventLoopProxy},
     window::{Window, WindowAttributes, WindowId},
 };
+
+#[cfg(target_os = "linux")]
+use winit::platform::wayland::ActiveEventLoopExtWayland;
 
 pub mod render;
 
@@ -44,32 +46,8 @@ where
     E: FnMut(WindowEvent, &mut Context, &Window),
     R: FnMut(&mut Ui, &mut render::Renderer),
 {
-    // Define our Vulkan configuration
-    let config = vulkano_util::context::VulkanoConfig {
-        instance_create_info: vk::instance::InstanceCreateInfo {
-            application_name: Some(WINDOW_TITLE.to_string()),
-            enabled_extensions: vk::instance::InstanceExtensions {
-                // Enable debugging features
-                ext_debug_utils: true,
-                ..Default::default()
-            },
-            // Allow us to use devices that do not fully support
-            // the Vulkan specification, such as Apple graphics hardware.
-            flags: vk::instance::InstanceCreateFlags::ENUMERATE_PORTABILITY,
-            ..Default::default()
-        },
-
-        // Use our callback to print debug messages.
-        debug_create_info: Some(
-            vk::instance::debug::DebugUtilsMessengerCreateInfo::user_callback(unsafe {
-                vk::instance::debug::DebugUtilsMessengerCallback::new(debug)
-            }),
-        ),
-
-        ..Default::default()
-    };
-    // Create a Vulkan instance and device with our configuration.
-    let vk_context = Arc::new(vulkano_util::context::VulkanoContext::new(config));
+    // Initialize wgpu
+    let wgpu = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
 
     // Create the application event loop
     let event_loop = EventLoop::with_user_event().build()?;
@@ -78,7 +56,7 @@ where
     let (event_tx, event_rx) = mpsc::channel::<(WindowId, WindowEvent)>();
     // Run the event loop.
     event_loop.run_app(&mut EventHandler {
-        vk_context,
+        insstance: wgpu,
         callbacks: Some(EventCallbacks {
             event_callback,
             render_callback,
@@ -98,7 +76,7 @@ struct EventCallbacks<EF, RF> {
 }
 
 struct EventHandler<E, R, EF, RF> {
-    vk_context: Arc<vulkano_util::context::VulkanoContext>,
+    insstance: wgpu::Instance,
     callbacks: Option<EventCallbacks<EF, RF>>,
     event_proxy: EventLoopProxy<UserEvent>,
     event_tx: mpsc::Sender<(WindowId, WindowEvent)>,
@@ -122,17 +100,24 @@ impl<
             return;
         };
 
-        // Create a window with a Vulkan surface.
+        // Create a window with a WGPU surface.
         let window = event_loop
             .create_window(Window::default_attributes().with_title(WINDOW_TITLE))
             .unwrap();
         let window = Arc::new(window);
 
-        let vk_context = self.vk_context.clone();
-        let vk_instance = vk_context.instance();
-        let surface = Surface::from_window(vk_instance.clone(), window.clone()).unwrap();
+        let instance = self.insstance.clone();
+        let surface = self.insstance.create_surface(window.clone()).unwrap();
 
         let event_proxy = self.event_proxy.clone();
+
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let viewports_supported = !event_loop.is_wayland();
+            } else {
+                let viewports_supported = true;
+            }
+        };
 
         // Launch a thread to do our work -- handling events, updating the UI, running the emulation
         // core, and rendering the screen. This way, we can tie the core loop to display refresh
@@ -147,11 +132,12 @@ impl<
                 render_thread(
                     event_callback(),
                     render_callback(),
-                    vk_context,
                     window,
+                    instance,
                     surface,
                     event_proxy.clone(),
                     event_rx,
+                    viewports_supported,
                 );
 
                 // Send an exit event after the render thread is
@@ -177,9 +163,7 @@ impl<
             UserEvent::Exit => event_loop.exit(),
             UserEvent::CreateWindow { request, response } => {
                 let window = Arc::new(event_loop.create_window(*request).unwrap());
-                let surface =
-                    Surface::from_window(self.vk_context.instance().clone(), window.clone())
-                        .unwrap();
+                let surface = self.insstance.create_surface(window.clone()).unwrap();
                 *response.1.lock().unwrap() = Some(CreateWindowResponse { window, surface });
                 response.0.notify_one();
             }
@@ -198,17 +182,19 @@ enum UserEvent {
 #[derive(Debug)]
 struct CreateWindowResponse {
     window: Arc<Window>,
-    surface: Arc<Surface>,
+    surface: wgpu::Surface<'static>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_thread<E, R>(
     mut event_callback: E,
     mut render_callback: R,
-    vk_context: Arc<vulkano_util::context::VulkanoContext>,
     window: Arc<Window>,
-    surface: Arc<Surface>,
+    instance: wgpu::Instance,
+    surface: wgpu::Surface<'static>,
     event_tx: winit::event_loop::EventLoopProxy<UserEvent>,
     event_rx: mpsc::Receiver<(WindowId, WindowEvent)>,
+    viewports_supported: bool,
 ) where
     E: FnMut(WindowEvent, &mut Context, &Window),
     R: FnMut(&mut Ui, &mut render::Renderer),
@@ -263,9 +249,9 @@ fn render_thread<E, R>(
     ]);
 
     // Create and initialize our renderer with a Vulkan surface.
-    let mut renderer = render::Renderer::new(vk_context, &surface, &mut imgui).unwrap();
+    let mut renderer = render::Renderer::new(&instance, &surface, &mut imgui).unwrap();
 
-    let mut target = render::Target::new(window.clone(), surface);
+    let mut target = render::Target::new(surface);
 
     let main_viewport = imgui.main_viewport_mut();
     ViewportBackend::initialize_viewport_data(main_viewport);
@@ -280,10 +266,12 @@ fn render_thread<E, R>(
     imgui.set_platform_backend(viewport_backend);
     imgui.set_renderer_backend(RendererViewportBackend {});
 
-    imgui
-        .io_mut()
-        .backend_flags
-        .insert(BackendFlags::PLATFORM_HAS_VIEWPORTS | BackendFlags::RENDERER_HAS_VIEWPORTS);
+    if viewports_supported {
+        imgui
+            .io_mut()
+            .backend_flags
+            .insert(BackendFlags::PLATFORM_HAS_VIEWPORTS | BackendFlags::RENDERER_HAS_VIEWPORTS);
+    }
 
     // We're done initializing, start the render loop!
     'main_loop: loop {
@@ -311,8 +299,7 @@ fn render_thread<E, R>(
                         .unwrap();
 
                     viewport.dpi_scale = window.scale_factor().ceil() as f32;
-                    viewport_windows
-                        .insert(id, (window.clone(), render::Target::new(window, surface)));
+                    viewport_windows.insert(id, (window.clone(), render::Target::new(surface)));
                 }
                 ViewportEvent::Destroy(id) => {
                     viewport_windows.remove(&id);
@@ -327,7 +314,8 @@ fn render_thread<E, R>(
                     window.request_redraw();
                 }
                 ViewportEvent::SetSize(id, size) => {
-                    let window = &viewport_windows[&id].0;
+                    let (window, target) = viewport_windows.get_mut(&id).unwrap();
+                    target.invalidate();
                     let _ = window
                         .request_inner_size(LogicalSize::<f32>::from(size).to_physical::<f32>(
                             imgui.viewport_by_id(id).unwrap().dpi_scale as f64,
@@ -445,44 +433,6 @@ fn render_thread<E, R>(
 
         frame.wait().unwrap();
     }
-}
-
-/// This callback will be invoked whenever the Vulkan API generates a debug message.
-fn debug(
-    severity: vk::instance::debug::DebugUtilsMessageSeverity,
-    ty: vk::instance::debug::DebugUtilsMessageType,
-    data: vk::instance::debug::DebugUtilsMessengerCallbackData<'_>,
-) {
-    use vk::instance::debug::DebugUtilsMessageSeverity as Severity;
-    use vk::instance::debug::DebugUtilsMessageType as Type;
-
-    let severity = if severity.contains(Severity::ERROR) {
-        "ERROR"
-    } else if severity.contains(Severity::WARNING) {
-        "WARNING"
-    } else if severity.contains(Severity::INFO) {
-        "INFO"
-    } else if severity.contains(Severity::VERBOSE) {
-        "VERBOSE"
-    } else {
-        "DEBUG"
-    };
-
-    let ty = if ty.contains(Type::VALIDATION) {
-        " [VALIDATION]"
-    } else if ty.contains(Type::PERFORMANCE) {
-        " [PERF]"
-    } else {
-        ""
-    };
-
-    eprintln!(
-        "[{severity}]{ty}{} {}",
-        data.message_id_name
-            .map(|s| format!(" [{s}]"))
-            .unwrap_or_default(),
-        data.message
-    );
 }
 
 struct ViewportBackend {
