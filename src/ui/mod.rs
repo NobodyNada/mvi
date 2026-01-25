@@ -257,10 +257,10 @@ impl Ui {
             }
         }
 
-        if self.download_progress.is_some() {
+        if let Some(download_progress) = self.download_progress.as_ref() {
             ignore_events = true;
             let mut completed = false;
-            match &self.download_progress.as_ref().unwrap().item {
+            match &download_progress.item {
                 DownloadItem::CoreDb(rx) => match rx.try_recv() {
                     Ok(Ok(db)) => {
                         completed = true;
@@ -363,12 +363,13 @@ impl Ui {
                     imgui::Image::new(framebuffer.texture.id, [w, h]).build(ui)
                 });
 
-            ignore_events |= self.ramwatch.draw(ui, self.tas.as_mut().unwrap());
-            self.piano_roll
-                .draw(ui, self.tas.as_mut().unwrap(), &self.keybinds);
+            #[expect(clippy::unnecessary_unwrap)] // false-positive
+            let tas = self.tas.as_mut().unwrap();
+            ignore_events |= self.ramwatch.draw(ui, tas);
+            self.piano_roll.draw(ui, tas, &self.keybinds);
 
             if let Some(trace) = &mut self.trace_debuger
-                && !trace.draw(ui, self.tas.as_mut().unwrap())
+                && !trace.draw(ui, tas)
             {
                 self.trace_debuger = None;
             }
