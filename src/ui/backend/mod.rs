@@ -249,7 +249,7 @@ fn render_thread<E, R>(
     ]);
 
     // Create and initialize our renderer with a Vulkan surface.
-    let mut renderer = render::Renderer::new(&instance, &surface, &mut imgui).unwrap();
+    let mut renderer = render::Renderer::new(&instance, &mut imgui).unwrap();
 
     let mut target = render::Target::new(surface);
 

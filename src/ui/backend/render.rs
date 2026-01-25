@@ -7,7 +7,6 @@ use std::{
 use anyhow::{Result, anyhow};
 use encase::ShaderType;
 use imgui::{DrawData, DrawIdx, FontAtlasFlags, TextureId, internal::RawWrapper};
-use itertools::Itertools;
 use zerocopy::IntoBytes;
 
 /// The renderer structure.
@@ -389,25 +388,15 @@ impl Renderer {
     }
 
     /// Initializes all rendering resources.
-    pub fn new(
-        instance: &wgpu::Instance,
-        surface: &wgpu::Surface,
-        imgui: &mut imgui::Context,
-    ) -> Result<Self> {
+    pub fn new(instance: &wgpu::Instance, imgui: &mut imgui::Context) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread().build()?;
         let adapter = runtime.block_on(instance.request_adapter(&Default::default()))?;
         let (device, queue) = runtime.block_on(adapter.request_device(&Default::default()))?;
 
         // Choose a surface format.
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = *surface_caps
-            .formats
-            .iter()
-            .find_or_first(|f| !f.is_srgb())
-            .unwrap();
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
+            format: wgpu::TextureFormat::Bgra8Unorm,
             width: 0,
             height: 0,
             present_mode: wgpu::PresentMode::AutoVsync,
