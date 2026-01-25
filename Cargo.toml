@@ -51,4 +51,3 @@ debug = true
 
 [patch.crates-io]
 imgui = { git = "https://github.com/imgui-rs/imgui-rs", rev = "67f7f11363e62f09aa0e1288a17800e505860486" }
-aws-lc-rs = { git = "https://github.com/aws/aws-lc-rs", rev = "d4c164669f3240e379951f4e073f91bc7ed774f0" }
