@@ -516,6 +516,10 @@ unsafe extern "C" fn environment_callback(cmd: u32, data: *mut c_void) -> bool {
     unsafe {
         let mut core = lock();
         match cmd {
+            RETRO_ENVIRONMENT_GET_VARIABLE => {
+                // TODO
+                true
+            }
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => core.set_pixel_format(*data.cast()),
             RETRO_ENVIRONMENT_SET_MEMORY_MAPS => core.set_memory_maps(*data.cast()),
             RETRO_ENVIRONMENT_SET_TRACE_CONTEXT => core.set_trace_context(data.cast()),

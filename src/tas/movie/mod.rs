@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ pub struct Movie {
     pub system_id: Option<String>,
     pub rom_filename: String,
     pub rom_sha256: [u8; 32],
+    pub environment_variables: HashMap<String, String>,
     pub rerecords: u32,
     pub ramwatches: Vec<RamWatch>,
 }
@@ -110,6 +111,7 @@ impl Movie {
             rom_sha256,
             core_id,
             system_id,
+            environment_variables: HashMap::new(),
             rerecords: 0,
             ramwatches: vec![],
         }
@@ -150,6 +152,7 @@ impl Movie {
             rom_sha256,
             core_id,
             system_id: file.system_id,
+            environment_variables: file.environment_variables,
             rerecords: file.rerecords,
             ramwatches: file.ramwatches,
         })

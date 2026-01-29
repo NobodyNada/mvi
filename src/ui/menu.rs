@@ -32,7 +32,7 @@ impl Ui {
                 }
                 if ui.menu_item("Open Movie...")
                     && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("mvi movie file", &["mvi"])
+                        .add_filter("Movie file", &["mvi", "bk2"])
                         .set_title("Select a movie file")
                         .pick_file()
                 {
@@ -369,7 +369,12 @@ impl Ui {
     fn open_movie(&mut self, path: std::path::PathBuf) {
         // **1.** Deserialize the movie file from disk
         self.handle_error(|ui| {
-            let file = tas::movie::file::MovieFile::load(std::fs::File::open(&path)?)?;
+            let extension = path.extension().and_then(|e| e.to_str());
+            let file = std::fs::File::open(&path)?;
+            let file = match extension {
+                Some("bk2") => tas::movie::file::MovieFile::load_bk2(file)?,
+                Some(_) | None => tas::movie::file::MovieFile::load(file)?,
+            };
             ui.open_movie_file(file, path, true)
         });
     }
