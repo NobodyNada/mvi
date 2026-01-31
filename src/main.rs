@@ -2,6 +2,7 @@ use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod core;
+mod expression;
 mod tas;
 mod ui;
 

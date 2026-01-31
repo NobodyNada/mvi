@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     core,
+    expression::{Expression, read_memory_many},
     tas::edit::{Pattern, PatternBuf},
 };
 
@@ -35,8 +36,30 @@ pub struct Movie {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RamWatch {
     pub name: String,
-    pub address: usize,
-    pub format: RamWatchFormat,
+    pub value: RamWatchValue,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum RamWatchValue {
+    Simple {
+        address: usize,
+        format: RamWatchFormat,
+    },
+    Expression(Expression),
+}
+
+impl RamWatchValue {
+    pub fn execute<F>(&self, read_memory: F) -> anyhow::Result<String>
+    where
+        F: FnMut(usize) -> Option<u8>,
+    {
+        match self {
+            Self::Simple { address, format } => {
+                Ok(format.format_value(read_memory_many(*address, format.width, read_memory)?))
+            }
+            Self::Expression(expression) => expression.execute(read_memory),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

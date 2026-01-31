@@ -1836,6 +1836,7 @@ dependencies = [
  "itertools 0.14.0",
  "libloading 0.9.0",
  "libretro-ffi",
+ "nom",
  "reqwest",
  "rfd",
  "rubato",

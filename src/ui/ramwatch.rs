@@ -12,8 +12,11 @@ struct Editor {
     state: EditorState,
     should_focus: bool,
     name: String,
+    /// `true` if expression must be used instead of address and format
+    use_expression: bool,
     address: String,
     format: movie::RamWatchFormat,
+    expression: String,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -26,8 +29,15 @@ enum EditorState {
 impl Editor {
     fn init_from_ram_watch(&mut self, watch: &movie::RamWatch) {
         self.name = watch.name.clone();
-        self.address = format!("{:#04X}", watch.address);
-        self.format = watch.format.clone();
+        match watch.value.clone() {
+            movie::RamWatchValue::Simple { address, format } => {
+                self.address = format!("{:#04X}", address);
+                self.format = format;
+            }
+            movie::RamWatchValue::Expression(expression) => {
+                self.expression = expression.to_string()
+            }
+        }
     }
 
     fn to_ram_watch(&self) -> Option<movie::RamWatch> {
@@ -35,14 +45,19 @@ impl Editor {
         if name.is_empty() {
             return None;
         }
-        let address =
-            usize::from_str_radix(self.address.strip_prefix("0x").unwrap_or(&self.address), 16)
-                .ok()?;
-        Some(movie::RamWatch {
-            name,
-            address,
-            format: self.format.clone(),
-        })
+        let value = if self.use_expression {
+            movie::RamWatchValue::Expression(self.expression.parse().ok()?)
+        } else {
+            movie::RamWatchValue::Simple {
+                address: usize::from_str_radix(
+                    self.address.strip_prefix("0x").unwrap_or(&self.address),
+                    16,
+                )
+                .ok()?,
+                format: self.format.clone(),
+            }
+        };
+        Some(movie::RamWatch { name, value })
     }
 }
 
@@ -52,12 +67,14 @@ impl Default for Editor {
             state: EditorState::Closed,
             should_focus: false,
             name: String::new(),
+            use_expression: false,
             address: String::new(),
             format: movie::RamWatchFormat {
                 width: 1,
                 hex: true,
                 signed: false,
             },
+            expression: String::new(),
         }
     }
 }
@@ -93,32 +110,57 @@ impl RamWatch {
                     }
                     ui.input_text("Name", &mut self.editor.name).build();
 
-                    ui.input_text("Address", &mut self.editor.address).build();
+                    if self.editor.use_expression {
+                        ui.input_text_multiline(
+                            "Expression",
+                            &mut self.editor.expression,
+                            ui.content_region_avail(),
+                        )
+                        .no_horizontal_scroll(true)
+                        .build();
+                    } else {
+                        ui.input_text("Address", &mut self.editor.address).build();
+
+                        let group = ui.begin_group();
+                        ui.columns(2, "ram_watch_editor", false);
+
+                        ui.text("Size");
+                        ui.radio_button("8 bits", &mut self.editor.format.width, 1);
+                        ui.radio_button("16 bits", &mut self.editor.format.width, 2);
+                        ui.radio_button("32 bits", &mut self.editor.format.width, 3);
+                        ui.radio_button("64 bits", &mut self.editor.format.width, 4);
+
+                        ui.next_column();
+
+                        ui.text("Format");
+                        ui.radio_button("Hex", &mut self.editor.format.hex, true);
+                        ui.radio_button("Decimal", &mut self.editor.format.hex, false);
+
+                        ui.checkbox("Signed", &mut self.editor.format.signed);
+                        group.end();
+                    }
 
                     let group = ui.begin_group();
-                    ui.columns(2, "ram_watch_editor", false);
+                    ui.columns(2, "ram_watch_confirm", false);
 
-                    ui.text("Size");
-                    ui.radio_button("8 bits", &mut self.editor.format.width, 1);
-                    ui.radio_button("16 bits", &mut self.editor.format.width, 2);
-                    ui.radio_button("32 bits", &mut self.editor.format.width, 3);
-                    ui.radio_button("64 bits", &mut self.editor.format.width, 4);
+                    let expression_label = if self.editor.use_expression {
+                        "Address"
+                    } else {
+                        "Expression"
+                    };
+                    if ui.button(expression_label) {
+                        self.editor.use_expression = !self.editor.use_expression;
+                    }
 
                     ui.next_column();
 
-                    ui.text("Format");
-                    ui.radio_button("Hex", &mut self.editor.format.hex, true);
-                    ui.radio_button("Decimal", &mut self.editor.format.hex, false);
-
-                    ui.checkbox("Signed", &mut self.editor.format.signed);
-                    group.end();
-
-                    ui.columns(1, "ram_watch_confirm", false);
+                    /*
                     let button_width = ui.calc_text_size("  Cancel  OK  ")[0];
                     ui.set_cursor_pos([
                         ui.window_size()[0] - button_width,
                         ui.window_size()[1] - ui.text_line_height_with_spacing() * 2.,
                     ]);
+                    // */
 
                     if ui.button("Cancel") || ui.is_key_pressed(imgui::Key::Escape) {
                         ui.close_current_popup();
@@ -141,6 +183,8 @@ impl RamWatch {
                             self.editor.state = EditorState::Closed;
                         }
                     });
+
+                    group.end();
                 }
                 _ => {
                     ui.open_popup(ADD_POPUP);
@@ -210,7 +254,7 @@ impl RamWatch {
 
                             ui.table_next_column();
                             if let Some(v) = tas.read_ram_watch(watch) {
-                                ui.text(watch.format.format_value(v));
+                                ui.text(v);
                             }
 
                             ui.table_next_column();
