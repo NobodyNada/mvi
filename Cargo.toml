@@ -30,6 +30,7 @@ libloading = "0.9.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
 reqwest = "0.13.1"
 rfd = "0.17.1"
+rhai = { version = "1.24.0", features = ["sync"] }
 rubato = "1.0.0"
 rust-ini = "0.21.0"
 serde = { version = "1.0.193", features = ["derive"] }

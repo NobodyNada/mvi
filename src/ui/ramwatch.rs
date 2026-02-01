@@ -1,19 +1,27 @@
 use imgui::Ui;
 
-use crate::tas::{Tas, movie};
+use crate::{
+    rhai::EngineExt,
+    tas::{Tas, movie},
+};
+use std::sync::OnceLock;
 
 pub struct RamWatch {
     pub opened: bool,
     editor: Editor,
     dragged_item: Option<usize>,
+    rhai_engine: rhai::Engine,
 }
 
 struct Editor {
     state: EditorState,
     should_focus: bool,
     name: String,
+    /// `true` if script must be used instead of address and format
+    use_script: bool,
     address: String,
     format: movie::RamWatchFormat,
+    rhai_script: String,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -26,23 +34,41 @@ enum EditorState {
 impl Editor {
     fn init_from_ram_watch(&mut self, watch: &movie::RamWatch) {
         self.name = watch.name.clone();
-        self.address = format!("{:#04X}", watch.address);
-        self.format = watch.format.clone();
+        match &watch.value {
+            movie::RamWatchValue::Simple { address, format } => {
+                self.use_script = false;
+                self.address = format!("{:#04X}", address);
+                self.format = format.clone();
+            }
+            movie::RamWatchValue::RhaiScript { source, .. } => {
+                self.use_script = true;
+                self.rhai_script = source.clone();
+            }
+        }
     }
 
-    fn to_ram_watch(&self) -> Option<movie::RamWatch> {
+    fn to_ram_watch(&self, rhai_engine: &rhai::Engine) -> Option<movie::RamWatch> {
         let name = self.name.trim().to_string();
         if name.is_empty() {
             return None;
         }
-        let address =
-            usize::from_str_radix(self.address.strip_prefix("0x").unwrap_or(&self.address), 16)
-                .ok()?;
-        Some(movie::RamWatch {
-            name,
-            address,
-            format: self.format.clone(),
-        })
+        let value = if self.use_script {
+            let ast = rhai_engine.compile(&self.rhai_script).ok()?;
+            movie::RamWatchValue::RhaiScript {
+                source: self.rhai_script.clone(),
+                ast: OnceLock::from(Ok(ast)),
+            }
+        } else {
+            movie::RamWatchValue::Simple {
+                address: usize::from_str_radix(
+                    self.address.strip_prefix("0x").unwrap_or(&self.address),
+                    16,
+                )
+                .ok()?,
+                format: self.format.clone(),
+            }
+        };
+        Some(movie::RamWatch { name, value })
     }
 }
 
@@ -52,22 +78,27 @@ impl Default for Editor {
             state: EditorState::Closed,
             should_focus: false,
             name: String::new(),
+            use_script: false,
             address: String::new(),
             format: movie::RamWatchFormat {
                 width: 1,
                 hex: true,
                 signed: false,
             },
+            rhai_script: String::new(),
         }
     }
 }
 
 impl RamWatch {
     pub fn new() -> RamWatch {
+        let mut rhai_engine = rhai::Engine::new();
+        rhai_engine.register_mem_module();
         RamWatch {
             opened: true,
             editor: Editor::default(),
             dragged_item: None,
+            rhai_engine,
         }
     }
 
@@ -93,43 +124,58 @@ impl RamWatch {
                     }
                     ui.input_text("Name", &mut self.editor.name).build();
 
-                    ui.input_text("Address", &mut self.editor.address).build();
-
-                    let group = ui.begin_group();
-                    ui.columns(2, "ram_watch_editor", false);
-
-                    ui.text("Size");
-                    ui.radio_button("8 bits", &mut self.editor.format.width, 1);
-                    ui.radio_button("16 bits", &mut self.editor.format.width, 2);
-                    ui.radio_button("32 bits", &mut self.editor.format.width, 3);
-                    ui.radio_button("64 bits", &mut self.editor.format.width, 4);
-
+                    ui.columns(2, "ram_watch_editor_script_switch", false);
+                    ui.radio_button("Use address", &mut self.editor.use_script, false);
                     ui.next_column();
+                    ui.radio_button("Use script", &mut self.editor.use_script, true);
+                    ui.columns(1, "ram_watch_editor_script_switch_end", false);
 
-                    ui.text("Format");
-                    ui.radio_button("Hex", &mut self.editor.format.hex, true);
-                    ui.radio_button("Decimal", &mut self.editor.format.hex, false);
+                    if self.editor.use_script {
+                        let mut text_size = ui.content_region_avail();
+                        text_size[1] -= ui.text_line_height_with_spacing() * 2.;
+                        ui.input_text_multiline("Script", &mut self.editor.rhai_script, text_size)
+                            .no_horizontal_scroll(true)
+                            .build();
+                    } else {
+                        ui.input_text("Address", &mut self.editor.address).build();
 
-                    ui.checkbox("Signed", &mut self.editor.format.signed);
-                    group.end();
+                        let group = ui.begin_group();
+                        ui.columns(2, "ram_watch_editor", false);
+
+                        ui.text("Size");
+                        ui.radio_button("8 bits", &mut self.editor.format.width, 1);
+                        ui.radio_button("16 bits", &mut self.editor.format.width, 2);
+                        ui.radio_button("32 bits", &mut self.editor.format.width, 3);
+                        ui.radio_button("64 bits", &mut self.editor.format.width, 4);
+
+                        ui.next_column();
+
+                        ui.text("Format");
+                        ui.radio_button("Hex", &mut self.editor.format.hex, true);
+                        ui.radio_button("Decimal", &mut self.editor.format.hex, false);
+
+                        ui.checkbox("Signed", &mut self.editor.format.signed);
+                        group.end();
+                    }
 
                     ui.columns(1, "ram_watch_confirm", false);
-                    let button_width = ui.calc_text_size("  Cancel  OK  ")[0];
+                    let button_width = ui.calc_text_size("  Cancel  OK   ")[0];
                     ui.set_cursor_pos([
                         ui.window_size()[0] - button_width,
                         ui.window_size()[1] - ui.text_line_height_with_spacing() * 2.,
                     ]);
-
                     if ui.button("Cancel") || ui.is_key_pressed(imgui::Key::Escape) {
                         ui.close_current_popup();
                         self.editor.state = EditorState::Closed;
                     }
                     ui.same_line();
 
-                    let watch = self.editor.to_ram_watch();
+                    let watch = self.editor.to_ram_watch(&self.rhai_engine);
                     ui.enabled(watch.is_some(), || {
                         if ui.button("OK")
-                            || (watch.is_some() && ui.is_key_pressed(imgui::Key::Enter))
+                            || (watch.is_some()
+                                && !self.editor.use_script
+                                && ui.is_key_pressed(imgui::Key::Enter))
                         {
                             ui.close_current_popup();
                             let watch = watch.unwrap();
@@ -157,12 +203,16 @@ impl RamWatch {
                 .opened(&mut self.opened)
                 .size([128., 448.], imgui::Condition::FirstUseEver)
                 .build(|| {
-                    if let Some(_token) = ui.begin_table("ram_watches", 3) {
+                    if let Some(_token) = ui.begin_table_with_flags(
+                        "ram_watches",
+                        3,
+                        imgui::TableFlags::SIZING_FIXED_FIT | imgui::TableFlags::RESIZABLE,
+                    ) {
                         // 3 columns: name, value, delete
                         ui.table_setup_column("Name");
                         ui.table_setup_column_with(imgui::TableColumnSetup {
                             name: "Value",
-                            flags: imgui::TableColumnFlags::WIDTH_FIXED,
+                            flags: imgui::TableColumnFlags::WIDTH_STRETCH,
                             init_width_or_weight: ui.calc_text_size("00000000")[0],
                             ..Default::default()
                         });
@@ -209,8 +259,13 @@ impl RamWatch {
                             ui.text(&watch.name);
 
                             ui.table_next_column();
-                            if let Some(v) = tas.read_ram_watch(watch) {
-                                ui.text(watch.format.format_value(v));
+                            match tas.read_ram_watch(watch, &mut self.rhai_engine) {
+                                Ok(text) => ui.text(text),
+                                Err(err) => {
+                                    ui.text(format!("{err:#}"));
+                                    eprintln!("failed to execute ramwatch: {err:#}");
+                                    eprintln!("Sources: {:?}", watch.value);
+                                }
                             }
 
                             ui.table_next_column();

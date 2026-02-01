@@ -38,6 +38,7 @@ pub struct Core {
     savestate_buffer: Box<[u8]>,
 }
 unsafe impl Send for Core {}
+unsafe impl Sync for Core {}
 
 #[expect(clippy::type_complexity)]
 pub struct CoreImpl {
@@ -175,6 +176,15 @@ impl Core {
 
     pub fn read_memory_byte(&self, addr: usize) -> Option<u8> {
         lock().get_memory_byte(addr).copied()
+    }
+
+    pub fn read_memory_le(&self, addr: usize, width: u8) -> Option<u64> {
+        let mut core = lock();
+        let mut v = 0;
+        for offset in 0..width as usize {
+            v |= (*core.get_memory_byte(addr + offset)? as u64) << (offset * 8);
+        }
+        Some(v)
     }
 
     pub fn run_frame(

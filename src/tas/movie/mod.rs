@@ -1,10 +1,10 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::OnceLock};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core,
+    core::{self, Core},
     tas::edit::{Pattern, PatternBuf},
 };
 
@@ -35,11 +35,60 @@ pub struct Movie {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RamWatch {
     pub name: String,
-    pub address: usize,
-    pub format: RamWatchFormat,
+    #[serde(flatten)]
+    pub value: RamWatchValue,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RamWatchValue {
+    /// Simple RAM watch value that fetches from an address using a specific format.
+    Simple {
+        address: usize,
+        format: RamWatchFormat,
+    },
+    /// Complex RAM watch value that runs a rhai script to compute the value
+    RhaiScript {
+        source: String,
+        /// The AST is initialized on demand.
+        /// Since the source may be invalid (e.g. from a hand-edited file), the ast may fail to
+        /// compile and this is stored as a `Result`.
+        #[serde(skip)]
+        ast: OnceLock<Result<rhai::AST, rhai::ParseError>>,
+    },
+}
+
+impl RamWatchValue {
+    pub fn execute(&self, core: &Core, rhai_engine: &mut rhai::Engine) -> anyhow::Result<String> {
+        match self {
+            Self::Simple { address, format } => Ok(format.format_value(
+                core.read_memory_le(*address, format.width)
+                    .with_context(|| {
+                        format!("out of bounds read at {address} (format: {format:?})")
+                    })?,
+            )),
+            Self::RhaiScript { source, ast } => {
+                let ast = match ast.get_or_init(|| rhai_engine.compile(source)) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Err(err.clone())
+                            .context("failed to compile RAM watch expression")?;
+                    }
+                };
+                rhai_engine.set_default_tag(rhai::Dynamic::from(unsafe {
+                    std::mem::transmute::<&Core, &'static Core>(core)
+                }));
+                let result = rhai_engine.eval_ast::<rhai::Dynamic>(ast);
+                rhai_engine.set_default_tag(0);
+                Ok(result
+                    .context("failed to execute RAM watch script")?
+                    .to_string())
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RamWatchFormat {
     pub width: u8,
     pub hex: bool,
