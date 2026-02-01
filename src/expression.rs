@@ -9,6 +9,7 @@ use nom::{
     number::complete::double,
     sequence::{delimited, pair},
 };
+use nom_locate::LocatedSpan;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
@@ -121,7 +122,7 @@ impl FromStr for Expression {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
+        Self::parse(s.into())
     }
 }
 
@@ -131,9 +132,11 @@ impl fmt::Display for Expression {
     }
 }
 
+type Span<'a> = LocatedSpan<&'a str>;
+
 impl Expression {
-    fn parse(s: &str) -> anyhow::Result<Self> {
-        fn quoted_string(s: &str) -> IResult<&str, Vec<StackOperation>> {
+    fn parse(s: Span<'_>) -> anyhow::Result<Self> {
+        fn quoted_string(s: Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
             let (s, quoted) = delimited(
                 tag("'"),
                 escaped_transform(
@@ -146,7 +149,7 @@ impl Expression {
             Ok((s, vec![StackOperation::PushString(quoted)]))
         }
 
-        fn double_quoted_string(s: &str) -> IResult<&str, Vec<StackOperation>> {
+        fn double_quoted_string(s: Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
             let (s, quoted) = delimited(
                 tag("\""),
                 escaped_transform(
@@ -159,7 +162,7 @@ impl Expression {
             Ok((s, vec![StackOperation::PushString(quoted)]))
         }
 
-        fn term(s: &str) -> IResult<&str, Vec<StackOperation>> {
+        fn term(s: Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
             delimited(
                 multispace0,
                 alt((
@@ -180,9 +183,9 @@ impl Expression {
                     ),
                     map_res(
                         pair(opt(alt((tag("0x"), tag("$")))), hex_digit1),
-                        |(hex_prefix, digits)| {
+                        |(hex_prefix, digits): (Option<Span<'_>>, Span<'_>)| {
                             let radix = if hex_prefix.is_some() { 16 } else { 10 };
-                            i64::from_str_radix(digits, radix)
+                            i64::from_str_radix(*digits, radix)
                                 .map(|i| vec![StackOperation::PushInteger(i)])
                         },
                     ),
@@ -195,7 +198,7 @@ impl Expression {
             )(s)
         }
 
-        fn unary_operators(s: &str) -> IResult<&str, Vec<StackOperation>> {
+        fn unary_operators(s: Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
             map(pair(opt(one_of("-~#")), term), |(op, mut rpn)| {
                 match op {
                     Some('-') => rpn.push(StackOperation::UnaryNegation),
@@ -222,8 +225,8 @@ impl Expression {
             &["*", "/", "%"],
         ];
 
-        fn binary_operator(ops: &[&str]) -> impl FnMut(&str) -> IResult<&str, &str> {
-            |s: &str| match *ops {
+        fn binary_operator(ops: &[&str]) -> impl FnMut(Span<'_>) -> IResult<Span<'_>, Span<'_>> {
+            |s: Span<'_>| match *ops {
                 [a] => alt((tag(a),))(s),
                 [a, b] => alt((tag(a), tag(b)))(s),
                 [a, b, c] => alt((tag(a), tag(b), tag(c)))(s),
@@ -234,8 +237,8 @@ impl Expression {
 
         fn binary_operators(
             binops: &[&[&str]],
-        ) -> impl FnMut(&str) -> IResult<&str, Vec<StackOperation>> {
-            |s: &str| -> IResult<&str, Vec<StackOperation>> {
+        ) -> impl FnMut(Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
+            |s: Span<'_>| -> IResult<Span<'_>, Vec<StackOperation>> {
                 let Some((low_precedence_binops, binops)) = binops.split_first() else {
                     return unary_operators(s);
                 };
@@ -248,7 +251,7 @@ impl Expression {
                     move || init.clone(),
                     |mut acc, (op, term)| {
                         acc.extend(term);
-                        match op {
+                        match *op {
                             "||" => acc.push(StackOperation::LogicalOr),
                             "&&" => acc.push(StackOperation::LogicalAnd),
                             "==" => acc.push(StackOperation::TestEqual),
@@ -275,7 +278,7 @@ impl Expression {
             }
         }
 
-        fn segments(s: &str) -> IResult<&str, Vec<StackOperation>> {
+        fn segments(s: Span<'_>) -> IResult<Span<'_>, Vec<StackOperation>> {
             fold_many0(
                 binary_operators(BINARY_OPERATORS),
                 Vec::new,
@@ -289,7 +292,12 @@ impl Expression {
         let tokens = match segments(s) {
             Ok((rest, tokens)) => {
                 if !rest.is_empty() {
-                    anyhow::bail!("junk {rest:?} at the end");
+                    anyhow::bail!(
+                        "junk {:?} at line #{} character #{}",
+                        *rest,
+                        rest.location_line(),
+                        rest.get_utf8_column()
+                    );
                 }
                 tokens
             }

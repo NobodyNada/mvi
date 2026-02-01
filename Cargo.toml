@@ -29,6 +29,7 @@ itertools = "0.14.0"
 libloading = "0.9.0"
 libretro-ffi = { version = "0.1.0", path = "libretro-ffi" }
 nom = "7.1.3"
+nom_locate = "4.2.0"
 reqwest = "0.13.1"
 rfd = "0.17.1"
 rubato = "1.0.0"
