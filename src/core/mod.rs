@@ -55,6 +55,12 @@ pub struct CoreImpl {
 // The input_callback cannot be safely sent across threads, but we are careful to never do so.
 unsafe impl Send for CoreImpl {}
 
+impl Drop for CoreImpl {
+    fn drop(&mut self) {
+        unsafe { (symbols().retro_deinit)() }
+    }
+}
+
 pub struct Frame {
     pub width: usize,
     pub height: usize,
