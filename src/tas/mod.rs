@@ -195,7 +195,7 @@ impl Tas {
 
     pub fn run_guest_frame(
         &mut self,
-        audio_callback: &mut impl FnMut(&[core::AudioFrame]),
+        audio_callback: &mut (impl FnMut(&[core::AudioFrame]) + Send),
     ) -> &core::Frame {
         self.trace = None;
         if self
@@ -237,7 +237,7 @@ impl Tas {
 
     pub fn run_host_frame(
         &mut self,
-        mut audio_callback: impl FnMut(&[core::AudioFrame]),
+        mut audio_callback: impl FnMut(&[core::AudioFrame]) + Send,
     ) -> &core::Frame {
         // Determine how many guest frames have elapsed since the last host frame
         let time = Instant::now();
