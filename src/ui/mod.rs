@@ -224,6 +224,10 @@ impl Ui {
         ignore_events |= self.draw_hash_mismatch(ui);
 
         if let Some(error) = &self.reported_error {
+            if error.is_fatal {
+                return;
+            }
+
             ignore_events = true;
             const ID: &str = "Error";
             match ui
@@ -245,15 +249,13 @@ impl Ui {
                     } else {
                         if ui.button("Close") {
                             ui.close_current_popup();
+                            self.reported_error = None;
                         }
                     }
                 }
                 _ => {
                     ui.open_popup(ID);
                 }
-            }
-            if error.is_fatal {
-                return;
             }
         }
 
