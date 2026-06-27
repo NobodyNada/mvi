@@ -38,6 +38,7 @@ pub struct Core {
     savestate_buffer: Box<[u8]>,
 }
 unsafe impl Send for Core {}
+unsafe impl Sync for Core {}
 
 #[expect(clippy::type_complexity)]
 pub struct CoreImpl {
@@ -47,13 +48,19 @@ pub struct CoreImpl {
     frame: Frame,
     input: *const [u8],
     input_ports: *const [InputPort],
-    audio_callback: Option<*mut dyn FnMut(&[AudioFrame])>,
+    audio_callback: Option<*mut (dyn FnMut(&[AudioFrame]) + Send)>,
     trace_context: *mut retro_trace_ctx_t,
     trace_buffer: Vec<u8>,
 }
 
 // The input_callback cannot be safely sent across threads, but we are careful to never do so.
 unsafe impl Send for CoreImpl {}
+
+impl Drop for CoreImpl {
+    fn drop(&mut self) {
+        unsafe { (symbols().retro_deinit)() }
+    }
+}
 
 pub struct Frame {
     pub width: usize,
@@ -171,11 +178,20 @@ impl Core {
         lock().get_memory_byte(addr).copied()
     }
 
+    pub fn read_memory_le(&self, addr: usize, width: u8) -> Option<u64> {
+        let mut core = lock();
+        let mut v = 0;
+        for offset in 0..width as usize {
+            v |= (*core.get_memory_byte(addr + offset)? as u64) << (offset * 8);
+        }
+        Some(v)
+    }
+
     pub fn run_frame(
         &mut self,
         input: &[u8],
         input_ports: &[crate::tas::input::InputPort],
-        mut audio_callback: impl FnMut(&[AudioFrame]),
+        mut audio_callback: impl FnMut(&[AudioFrame]) + Send,
     ) {
         let run = *symbols().retro_run;
         unsafe {
@@ -186,8 +202,8 @@ impl Core {
             // used during the execution of this function. The explicit transmute is needed
             // due to https://github.com/rust-lang/rust/pull/136776
             core.audio_callback = Some(std::mem::transmute::<
-                *mut dyn FnMut(&[AudioFrame]),
-                *mut (dyn FnMut(&[AudioFrame]) + 'static),
+                *mut (dyn FnMut(&[AudioFrame]) + Send),
+                *mut (dyn FnMut(&[AudioFrame]) + Send + 'static),
             >(
                 std::ptr::addr_of_mut!(audio_callback) as *mut _
             ));

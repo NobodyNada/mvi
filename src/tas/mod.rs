@@ -153,12 +153,12 @@ impl Tas {
         &self.movie
     }
 
-    pub fn read_ram_watch(&self, watch: &movie::RamWatch) -> Option<u64> {
-        let mut v = 0;
-        for offset in 0..watch.format.width as usize {
-            v |= (self.core.read_memory_byte(watch.address + offset)? as u64) << (offset * 8);
-        }
-        Some(v)
+    pub fn read_ram_watch(
+        &self,
+        watch: &movie::RamWatch,
+        rhai_engine: &mut rhai::Engine,
+    ) -> anyhow::Result<String> {
+        watch.value.execute(&self.core, rhai_engine)
     }
 
     pub fn ramwatches_mut(&mut self) -> &mut Vec<movie::RamWatch> {
@@ -195,7 +195,7 @@ impl Tas {
 
     pub fn run_guest_frame(
         &mut self,
-        audio_callback: &mut impl FnMut(&[core::AudioFrame]),
+        audio_callback: &mut (impl FnMut(&[core::AudioFrame]) + Send),
     ) -> &core::Frame {
         self.trace = None;
         if self
@@ -237,7 +237,7 @@ impl Tas {
 
     pub fn run_host_frame(
         &mut self,
-        mut audio_callback: impl FnMut(&[core::AudioFrame]),
+        mut audio_callback: impl FnMut(&[core::AudioFrame]) + Send,
     ) -> &core::Frame {
         // Determine how many guest frames have elapsed since the last host frame
         let time = Instant::now();
