@@ -40,7 +40,7 @@ pub struct RamWatch {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum RamWatchValue {
     /// Simple RAM watch value that fetches from an address using a specific format.
     Simple {
